@@ -10,16 +10,17 @@ A Next.js web app in early development. The foundation is in place (authenticati
 | UI        | [shadcn/ui](https://ui.shadcn.com) (`base-nova` style on Base UI), Tailwind CSS v4, Lucide icons, `next-themes`  |
 | Auth      | [Clerk](https://clerk.com)                                                                                       |
 | Database  | [Neon](https://neon.com) Postgres: project `bro-pilot`, region `aws-us-east-2`, configured in `neon.ts`          |
-| Hosting   | Not set up yet                                                                                                   |
+| ORM       | [Drizzle ORM](https://orm.drizzle.team) with Neon's serverless HTTP driver; schema applied with `drizzle-kit push` |
+| Hosting   | [Railway](https://railway.com)                                                                                   |
 
 ## Status
 
 | Feature                  | Status      | Notes                                                                                                                  |
 | ------------------------ | ----------- | ---------------------------------------------------------------------------------------------------------------------- |
-| Sign in / sign up        | Done        | Clerk pages at `/sign-in` and `/sign-up`, Clerk middleware in `proxy.ts`, sign-in buttons and user menu on the home page |
+| Sign in / sign up        | Done        | Clerk pages at `/sign-in` and `/sign-up`, Clerk middleware in `proxy.ts`; the home page requires sign-in and shows a user menu |
 | UI kit and theming       | Done        | 61 shadcn/ui components in `components/ui`; light, dark and system themes, press `d` to toggle                         |
-| Neon database            | In progress | Project provisioned and linked; no tables yet                                                                          |
-| Data layer (ORM, schema) | Planned     |                                                                                                                        |
+| Neon database            | Done        | Project provisioned and linked                                                                                         |
+| Data layer (ORM, schema) | In progress | Drizzle is set up with a `bots` table (owner, name, avatar seed, job, instructions, sandbox ID); the app does not read or write it yet |
 | Product features         | Not started | The home page is still the starter page                                                                                |
 
 ## Running locally
@@ -46,6 +47,8 @@ Create `.env.local` before starting. It needs these variables (names only; value
 
 To get the Neon variables, run `npx neon@latest login`, then `npx neon@latest link` and pick the `bro-pilot` project. The link command writes them to `.env.local`.
 
+Database: edit `lib/db/schema.ts`, then run `npm run db:push` to apply it to Neon. There are no migrations; every schema change starts from a clean slate. `npm run db:studio` opens Drizzle Studio.
+
 Other scripts: `npm run build`, `npm run start`, `npm run lint`, `npm run typecheck` and `npm run format`. Add UI components with `npx shadcn@latest add <component>`.
 
 ## Project structure
@@ -54,13 +57,14 @@ Other scripts: `npm run build`, `npm run start`, `npm run lint`, `npm run typech
 app/              App Router: root layout, home page, /sign-in and /sign-up routes
 components/       Theme provider; components/ui holds the shadcn/ui components
 hooks/            Shared React hooks
-lib/              Shared utilities
+lib/              Shared utilities; lib/db has the Drizzle client and schema
 public/           Static assets
 proxy.ts          Clerk middleware (Next.js proxy)
 neon.ts           Neon configuration (services and branch policy)
+drizzle.config.ts Drizzle Kit configuration (used by db:push)
 .claude/skills/   Skills for AI coding assistants (Clerk, shadcn/ui, Neon)
 ```
 
 ## Deployment
 
-No deployment is configured yet, so there is no live URL.
+Deployed on Railway from this repository: https://bro-pilot-production.up.railway.app

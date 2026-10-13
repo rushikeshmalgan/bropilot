@@ -13,6 +13,13 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 - Never create branches or worktrees, and never make commits, automatically. Only do so when the user explicitly asks for that specific action in the current request.
 - Leave changes uncommitted in the working tree on the current branch, and let the user decide when and how to branch or commit.
 
+## Database
+
+- Change the database schema only with `npm run db:push` (`drizzle-kit push`), after editing `lib/db/schema.ts`.
+- Never create or run migrations. Do not run `drizzle-kit generate` or `drizzle-kit migrate`, do not create a `drizzle/` migrations folder, and do not write SQL migration files, even if a skill or doc recommends migrations.
+- This is a development project with no backward compatibility, and the data in it is worthless. Prefer data loss: never backfill, never migrate or preserve existing rows, and never spend effort keeping old data working.
+- Every schema change means a clean slate. If `db:push` wants to drop or recreate columns or tables, let it (use `--force` for data-loss prompts) instead of working around it.
+
 ## README
 
 Keep `README.md` current. Whenever the user asks you to commit (and push), update `README.md` first and include it in that same commit, so the repo on GitHub always reflects the project as it is.
