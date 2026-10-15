@@ -1,6 +1,6 @@
 # bro-pilot
 
-A Next.js web app in early development. The foundation is in place (authentication, a UI component library, theming and a Neon Postgres database), but no product features have been built yet.
+A web app for creating AI bots and chatting with them, in early development. Each signed-in user gets a sidebar of their own bots, can create new ones (name, job, instructions) and open a chat with each. The app shell and screens follow the Figma designs, and bots are saved to a Neon Postgres database. Bots don't reply yet, and messages and group chats aren't saved.
 
 ## Tech stack
 
@@ -17,11 +17,15 @@ A Next.js web app in early development. The foundation is in place (authenticati
 
 | Feature                  | Status      | Notes                                                                                                                  |
 | ------------------------ | ----------- | ---------------------------------------------------------------------------------------------------------------------- |
-| Sign in / sign up        | Done        | Clerk pages at `/sign-in` and `/sign-up`, Clerk middleware in `proxy.ts`; the home page requires sign-in and shows a user menu |
-| UI kit and theming       | Done        | 61 shadcn/ui components in `components/ui`; light, dark and system themes, press `d` to toggle                         |
+| Sign in / sign up        | Done        | Clerk pages at `/sign-in` and `/sign-up`, Clerk middleware in `proxy.ts`; every app page requires sign-in |
+| UI kit and theming       | Done        | 61 shadcn/ui components in `components/ui`; light, dark and system themes, press `d` to toggle (the designs are dark) |
 | Neon database            | Done        | Project provisioned and linked                                                                                         |
-| Data layer (ORM, schema) | In progress | Drizzle is set up with a `bots` table (owner, name, avatar seed, job, instructions, sandbox ID); the app does not read or write it yet |
-| Product features         | Not started | The home page is still the starter page                                                                                |
+| App shell                | Done        | Sidebar with the user's bots, a "+" menu, bot search (⌘K / Ctrl+K), the Clerk user menu, and an icon-only collapsed mode (⌘B / Ctrl+B) |
+| Create a bot             | Done        | "New bot" dialog with job suggestions; saves to the `bots` table and opens the bot's chat |
+| Bot faces                | Placeholder | Every bot shows the project favicon; Shuffle re-rolls the stored face seed, but faces aren't generated yet |
+| Chat                     | In progress | `/chat/[id]` shows the bot, message bubbles and the composer; messages only live on the page and bots don't reply yet |
+| Bot screen panel         | Placeholder | The monitor button opens a side panel; the bot's live screen isn't connected yet |
+| Group chats              | Not started | The "New group chat" dialog exists, but groups aren't saved (it shows a notice instead) |
 
 ## Running locally
 
@@ -54,10 +58,10 @@ Other scripts: `npm run build`, `npm run start`, `npm run lint`, `npm run typech
 ## Project structure
 
 ```
-app/              App Router: root layout, home page, /sign-in and /sign-up routes
-components/       Theme provider; components/ui holds the shadcn/ui components
+app/              App Router: root layout, home page (/), bot chat (/chat/[id]), /sign-in and /sign-up
+components/       App shell, sidebar, chat view, bot dialogs and bot avatar; components/ui holds the shadcn/ui components
 hooks/            Shared React hooks
-lib/              Shared utilities; lib/db has the Drizzle client and schema
+lib/              Shared utilities; lib/bots.ts reads bots, lib/actions.ts saves them, lib/db has the Drizzle client and schema
 public/           Static assets
 proxy.ts          Clerk middleware (Next.js proxy)
 neon.ts           Neon configuration (services and branch policy)
