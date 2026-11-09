@@ -14,7 +14,7 @@ export function BotEmpty() {
     <Empty className="text-wrap">
       <EmptyHeader>
         <EmptyMedia className="mb-4">
-          <BotAvatar name="Bro Pilot" />
+          <BotAvatar name="Bro Pilot" seed="bro" />
         </EmptyMedia>
         <EmptyTitle>Meet your first bot</EmptyTitle>
         <EmptyDescription>
