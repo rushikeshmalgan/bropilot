@@ -2,13 +2,18 @@ import { formatDistanceToNowStrict } from "date-fns"
 import { cookies } from "next/headers"
 
 import { AppSidebar } from "@/components/app-sidebar"
-import { BotDialogsProvider, type SidebarBot } from "@/components/bot-dialogs"
+import {
+  BotDialogsProvider,
+  type SidebarBot,
+  type SidebarGroup,
+} from "@/components/bot-dialogs"
 import {
   SidebarInset,
   SidebarProvider,
   SidebarTrigger,
 } from "@/components/ui/sidebar"
 import { listBots } from "@/lib/bots"
+import { listChats, listGroupChats } from "@/lib/chats"
 
 function formatAgo(date: Date) {
   if (Date.now() - date.getTime() < 60_000) {
@@ -19,15 +24,33 @@ function formatAgo(date: Date) {
 }
 
 export async function AppShell({ children }: { children: React.ReactNode }) {
-  const [bots, cookieStore] = await Promise.all([listBots(), cookies()])
+  const [bots, chats, groups, cookieStore] = await Promise.all([
+    listBots(),
+    listChats(),
+    listGroupChats(),
+    cookies(),
+  ])
 
   return (
     <AppShellFrame
-      bots={bots.map((bot) => ({
-        id: bot.id,
-        name: bot.name,
-        job: bot.job,
-        ago: formatAgo(bot.createdAt),
+      bots={bots.map((bot) => {
+        const botChats = chats.filter((chat) => chat.botId === bot.id)
+
+        return {
+          id: bot.id,
+          name: bot.name,
+          job: bot.job,
+          avatar: bot.avatar,
+          // The sidebar shows when the bot was last talked to.
+          ago: formatAgo(botChats[0]?.updatedAt ?? bot.createdAt),
+          chats: botChats.map((chat) => ({ id: chat.id, title: chat.title })),
+        }
+      })}
+      groups={groups.map((group) => ({
+        id: group.id,
+        title: group.title,
+        ago: formatAgo(group.updatedAt),
+        botNames: group.bots.map((bot) => bot.name),
       }))}
       defaultOpen={cookieStore.get("sidebar_state")?.value !== "false"}
     >
@@ -40,15 +63,17 @@ export async function AppShell({ children }: { children: React.ReactNode }) {
 // fixed bots.
 export function AppShellFrame({
   bots,
+  groups,
   defaultOpen,
   children,
 }: {
   bots: SidebarBot[]
+  groups: SidebarGroup[]
   defaultOpen: boolean
   children: React.ReactNode
 }) {
   return (
-    <BotDialogsProvider bots={bots}>
+    <BotDialogsProvider bots={bots} groups={groups}>
       <SidebarProvider
         defaultOpen={defaultOpen}
         style={{ "--sidebar-width-icon": "4rem" } as React.CSSProperties}

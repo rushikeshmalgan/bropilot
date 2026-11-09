@@ -25,18 +25,35 @@ import {
 import { Input } from "@/components/ui/input"
 import { Spinner } from "@/components/ui/spinner"
 import { Textarea } from "@/components/ui/textarea"
-import { toast } from "@/components/ui/toast"
-import { createBot } from "@/lib/actions"
+import { createBot, createGroupChat } from "@/lib/actions"
+import { randomBotFace } from "@/lib/bot-faces"
+
+export type SidebarChat = {
+  id: string
+  title: string
+}
 
 export type SidebarBot = {
   id: string
   name: string
   job: string
+  // Seed for the bot's face (see lib/bot-faces.ts)
+  avatar: string
   ago: string
+  // This bot's one-on-one chats, most recently active first.
+  chats: SidebarChat[]
+}
+
+export type SidebarGroup = {
+  id: string
+  title: string
+  ago: string
+  botNames: string[]
 }
 
 type BotDialogs = {
   bots: SidebarBot[]
+  groups: SidebarGroup[]
   openNewBot: () => void
   openNewGroup: () => void
 }
@@ -59,15 +76,13 @@ const JOB_SUGGESTIONS = [
   "Tutor",
 ]
 
-function newFaceSeed() {
-  return crypto.randomUUID().slice(0, 8)
-}
-
 export function BotDialogsProvider({
   bots,
+  groups,
   children,
 }: {
   bots: SidebarBot[]
+  groups: SidebarGroup[]
   children: React.ReactNode
 }) {
   const [newBotOpen, setNewBotOpen] = React.useState(false)
@@ -76,10 +91,11 @@ export function BotDialogsProvider({
   const value = React.useMemo<BotDialogs>(
     () => ({
       bots,
+      groups,
       openNewBot: () => setNewBotOpen(true),
       openNewGroup: () => setNewGroupOpen(true),
     }),
-    [bots]
+    [bots, groups]
   )
 
   return (
@@ -120,7 +136,9 @@ function NewBotForm({ onDone }: { onDone: () => void }) {
   const [name, setName] = React.useState("")
   const [job, setJob] = React.useState("")
   const [instructions, setInstructions] = React.useState("")
-  const [avatar, setAvatar] = React.useState(newFaceSeed)
+  // Random on the client only: the form mounts when the dialog opens, so this
+  // never runs during server rendering.
+  const [avatar, setAvatar] = React.useState<string>(() => randomBotFace())
   const [error, setError] = React.useState<string | null>(null)
   const [pending, startTransition] = React.useTransition()
 
@@ -137,7 +155,8 @@ function NewBotForm({ onDone }: { onDone: () => void }) {
       }
 
       onDone()
-      router.push(`/chat/${result.id}`)
+      // Opens the bot's chat, starting one if it has none.
+      router.push(`/bot/${result.id}`)
     })
   }
 
@@ -165,7 +184,7 @@ function NewBotForm({ onDone }: { onDone: () => void }) {
 
       <div className="mb-3 flex items-center gap-4">
         <div className="flex size-12 shrink-0 items-center justify-center">
-          <BotAvatar name={name || "Bot"} size="lg" />
+          <BotAvatar name={name || "Bot"} seed={avatar} size="lg" />
         </div>
         <div className="flex min-w-0 flex-1 flex-col">
           <span className="text-sm font-medium">Face</span>
@@ -178,7 +197,7 @@ function NewBotForm({ onDone }: { onDone: () => void }) {
           variant="outline"
           size="sm"
           className="text-sm"
-          onClick={() => setAvatar(newFaceSeed())}
+          onClick={() => setAvatar((current) => randomBotFace(current))}
         >
           <ShuffleIcon data-icon="inline-start" />
           Shuffle
@@ -237,19 +256,33 @@ function NewBotForm({ onDone }: { onDone: () => void }) {
 }
 
 function NewGroupForm({ onDone }: { onDone: () => void }) {
+  const router = useRouter()
   const { bots } = useBotDialogs()
   const [name, setName] = React.useState("")
   const [selected, setSelected] = React.useState<string[]>([])
+  const [error, setError] = React.useState<string | null>(null)
+  const [pending, startTransition] = React.useTransition()
 
   function onSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
+    setError(null)
 
-    // There is no table for group chats yet, so say so instead of pretending.
-    toast.add({
-      title: "Group chats aren't saved yet",
-      description: "Bots work one-on-one for now.",
+    if (selected.length === 0) {
+      setError("Pick at least one bot.")
+      return
+    }
+
+    startTransition(async () => {
+      const result = await createGroupChat({ name, botIds: selected })
+
+      if ("error" in result) {
+        setError(result.error)
+        return
+      }
+
+      onDone()
+      router.push(`/chat/${result.id}`)
     })
-    onDone()
   }
 
   return (
@@ -294,19 +327,27 @@ function NewGroupForm({ onDone }: { onDone: () => void }) {
                     )
                   }
                 />
-                <BotAvatar name={bot.name} className="size-4.5" />
+                <BotAvatar
+                  name={bot.name}
+                  seed={bot.avatar}
+                  className="size-4.5"
+                />
                 {bot.name}
               </label>
             ))}
           </div>
         </Field>
+        {error && <FieldError>{error}</FieldError>}
       </FieldGroup>
 
       <DialogFooter>
         <DialogClose render={<Button type="button" variant="outline" />}>
           Cancel
         </DialogClose>
-        <Button type="submit">Create group</Button>
+        <Button type="submit" disabled={pending}>
+          {pending && <Spinner data-icon="inline-start" />}
+          Create group
+        </Button>
       </DialogFooter>
     </form>
   )

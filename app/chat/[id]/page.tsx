@@ -3,7 +3,8 @@ import { notFound } from "next/navigation"
 
 import { AppShell } from "@/components/app-shell"
 import { ChatView } from "@/components/chat-view"
-import { getBot } from "@/lib/bots"
+import type { ChatUIMessage } from "@/lib/chat-types"
+import { getChat, getMessages } from "@/lib/chats"
 
 export default async function ChatPage({
   params,
@@ -13,15 +14,34 @@ export default async function ChatPage({
   await auth.protect()
 
   const { id } = await params
-  const bot = await getBot(id)
 
-  if (!bot) {
+  // A chat that belongs to someone else is a 404, the same as one that doesn't
+  // exist, so URLs can't be used to find out what exists.
+  const [chat, messages] = await Promise.all([getChat(id), getMessages(id)])
+  if (!chat) {
     notFound()
   }
 
   return (
     <AppShell>
-      <ChatView bot={{ id: bot.id, name: bot.name, job: bot.job }} />
+      <ChatView
+        // A new key resets the draft and messages when switching chats.
+        key={chat.id}
+        chat={{ id: chat.id, title: chat.title, isGroup: chat.botId === null }}
+        bots={chat.bots}
+        initialMessages={messages.map(
+          (message): ChatUIMessage => ({
+            id: message.id,
+            role: message.role,
+            parts: message.parts,
+            metadata: {
+              botId: message.botId,
+              botName: chat.bots.find((bot) => bot.id === message.botId)?.name,
+              status: message.status === "error" ? "error" : "done",
+            },
+          })
+        )}
+      />
     </AppShell>
   )
 }
