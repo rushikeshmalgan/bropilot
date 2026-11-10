@@ -15,6 +15,8 @@ const eslintConfig = defineConfig([
     // Example templates that ship with the AI skills, not app code:
     ".agents/**",
     ".claude/**",
+    // Trigger.dev build output:
+    ".trigger/**",
   ]),
 ]);
 

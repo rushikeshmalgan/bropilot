@@ -12,6 +12,8 @@ A web app for creating AI bots and chatting with them, in early development. Eac
 | Database  | [Neon](https://neon.com) Postgres: project `bro-pilot`, region `aws-us-east-2`, configured in `neon.ts`          |
 | ORM       | [Drizzle ORM](https://orm.drizzle.team) with Neon's serverless HTTP driver; schema applied with `drizzle-kit push` |
 | AI        | [Vercel AI SDK](https://ai-sdk.dev) 7 (`ai`, `@ai-sdk/react`) with the Google Gemini provider; chat UI from [AI Elements](https://elements.ai-sdk.dev) |
+| Background jobs | [Trigger.dev](https://trigger.dev) v4 (`@trigger.dev/sdk`), configured in `trigger.config.ts`; tasks live in `src/trigger` |
+| Tests     | [Vitest](https://vitest.dev); tests run against the dev database with throwaway user IDs and a fake model          |
 | Hosting   | [Railway](https://railway.com)                                                                                   |
 
 ## Status
@@ -27,6 +29,8 @@ A web app for creating AI bots and chatting with them, in early development. Eac
 | Chats and messages       | Done        | `/chat/[id]` loads a chat's saved messages. A bot opens its latest chat at `/bot/[id]`, or starts one; the sidebar lists the active bot's chats with a "New chat" action, and chats can be deleted. Only the owner can open a chat; anyone else gets a 404 |
 | Bot replies              | Done        | Messages go to `POST /api/chat`, which saves your message, then streams the bot's reply and saves it. The bot's name, job and instructions become its system prompt. Needs `GOOGLE_GENERATIVE_AI_API_KEY`. Each reply's token counts (input, output, total) are saved in the message's `usage` column. A model error (including a 429 from the free tier) is shown in the chat as a readable, errored message and saved with status `error`. Limits: 8000 characters per message, the last 30 messages sent to the model, 10 messages per user per minute (in memory, so per server instance) |
 | Bot screen panel         | Placeholder | The monitor button opens a side panel on one-on-one chats; the bot's live screen isn't connected yet |
+| Background tasks         | In progress | Trigger.dev is set up with one sample task (`hello-world`); bot replies don't run on it yet |
+| Automated tests          | Done        | `npm test` runs the Vitest suite: chat logic, rate limiting, bot faces and owner-scoped database access |
 | Group chats              | Done        | The "New group chat" dialog saves a named chat with the chosen bots and opens it; group chats are listed in the sidebar and reopen with their messages. Start a message with `@name` to pick which bot answers; with no mention, the bot that spoke last answers |
 
 ## Running locally
@@ -51,10 +55,15 @@ Create `.env.local` before starting. It needs these variables (names only; value
 | `DATABASE_URL_UNPOOLED`                                                                               | Neon direct (non-pooled) connection string       |
 | `NEON_BRANCH`                                                                                         | Neon branch the variables were pulled for        |
 | `GOOGLE_GENERATIVE_AI_API_KEY`                                                                        | Google Gemini API key for bot replies (get one at <https://aistudio.google.com/apikey>) |
+| `TRIGGER_SECRET_KEY`                                                                                  | Trigger.dev secret key for the environment (optional until background tasks are used) |
 
 To get the Neon variables, run `npx neon@latest login`, then `npx neon@latest link` and pick the `bro-pilot` project. The link command writes them to `.env.local`.
 
 Database: edit `lib/db/schema.ts`, then run `npm run db:push` to apply it to Neon. There are no migrations; every schema change starts from a clean slate. `npm run db:studio` opens Drizzle Studio.
+
+Tests: `npm test` runs the Vitest suite. It reads `.env.local` and uses the database in `DATABASE_URL`, creating rows under throwaway user IDs and deleting them afterwards. It never calls the real model.
+
+Background tasks: `npx trigger.dev@latest dev` runs the tasks in `src/trigger` locally (run `npx trigger.dev@latest login` once first).
 
 Other scripts: `npm run build`, `npm run start`, `npm run lint`, `npm run typecheck` and `npm run format`. Add UI components with `npx shadcn@latest add <component>`.
 
@@ -66,10 +75,15 @@ components/       App shell, sidebar, chat view, bot dialogs and bot avatar; com
 hooks/            Shared React hooks
 lib/              Shared utilities; lib/ai.ts holds the model (one constant), limits and the system prompt, lib/chat-reply.ts saves a message and streams the reply, lib/rate-limit.ts is the per-user limiter, lib/chat-store.ts holds the chat and message queries (each scoped to the owner), lib/chats.ts and lib/bots.ts are the signed-in read helpers, lib/actions.ts has the server actions, lib/db has the Drizzle client and schema (bots, chats, chat_bots, messages), lib/bot-faces.ts lists the bot faces
 public/           Static assets; public/bots holds the 50 bot face images (SVG)
+src/trigger/      Trigger.dev tasks
+test/             Vitest tests; test/fakes holds in-memory stand-ins (fake model), test/helpers the database helpers
+scripts/          Scripts run by hand with `npx tsx`; scripts/env.ts loads .env.local for them
 proxy.ts          Clerk middleware (Next.js proxy)
 neon.ts           Neon configuration (services and branch policy)
 drizzle.config.ts Drizzle Kit configuration (used by db:push)
-.claude/skills/   Skills for AI coding assistants (Clerk, shadcn/ui, Neon)
+trigger.config.ts Trigger.dev configuration (project, task folder, max duration)
+vitest.config.ts  Vitest configuration
+.claude/skills/   Skills for AI coding assistants (Clerk, shadcn/ui, Neon, Trigger.dev)
 ```
 
 ## Deployment
