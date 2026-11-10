@@ -1,6 +1,6 @@
 # bro-pilot
 
-A web app for creating AI bots and chatting with them, in early development. Each signed-in user gets a sidebar of their own bots, can create new ones (name, job, instructions), start several chats with each bot, and set up group chats with more than one bot. Bots answer with streaming AI replies (Google Gemini), and bots, chats and messages are saved to a Neon Postgres database. The app shell and screens follow the Figma designs.
+A web app for creating AI bots and chatting with them, in early development. Each signed-in user gets a sidebar of their own bots, can create new ones (name, job, instructions), start several chats with each bot, and set up group chats with more than one bot. Bots answer with AI replies (Google Gemini) that are written by a background run, so a reply keeps going if the page is closed and shows up again when it's reopened. Bots, chats, messages and runs are saved to a Neon Postgres database. The app shell and screens follow the Figma designs.
 
 ## Tech stack
 
@@ -12,7 +12,7 @@ A web app for creating AI bots and chatting with them, in early development. Eac
 | Database  | [Neon](https://neon.com) Postgres: project `bro-pilot`, region `aws-us-east-2`, configured in `neon.ts`          |
 | ORM       | [Drizzle ORM](https://orm.drizzle.team) with Neon's serverless HTTP driver; schema applied with `drizzle-kit push` |
 | AI        | [Vercel AI SDK](https://ai-sdk.dev) 7 (`ai`, `@ai-sdk/react`) with the Google Gemini provider; chat UI from [AI Elements](https://elements.ai-sdk.dev) |
-| Background jobs | [Trigger.dev](https://trigger.dev) v4 (`@trigger.dev/sdk`), configured in `trigger.config.ts`; tasks live in `src/trigger` |
+| Background jobs | [Trigger.dev](https://trigger.dev) v4 (`@trigger.dev/sdk`, `@trigger.dev/react-hooks`), configured in `trigger.config.ts`; tasks live in `src/trigger`. Every bot reply runs as a task |
 | Tests     | [Vitest](https://vitest.dev); tests run against the dev database with throwaway user IDs and a fake model          |
 | Hosting   | [Railway](https://railway.com)                                                                                   |
 
@@ -27,10 +27,10 @@ A web app for creating AI bots and chatting with them, in early development. Eac
 | Create a bot             | Done        | "New bot" dialog with job suggestions; saves to the `bots` table and opens the bot's chat |
 | Bot faces                | Done        | 50 prebuilt faces in `public/bots`; the New bot dialog picks one at random, Shuffle always changes it, and the preview updates live. The chosen face is stored on the bot and shown in the sidebar, search, chat header and its messages; bots with older seeds map to a stable face |
 | Chats and messages       | Done        | `/chat/[id]` loads a chat's saved messages. A bot opens its latest chat at `/bot/[id]`, or starts one; the sidebar lists the active bot's chats with a "New chat" action, and chats can be deleted. Only the owner can open a chat; anyone else gets a 404 |
-| Bot replies              | Done        | Messages go to `POST /api/chat`, which saves your message, then streams the bot's reply and saves it. The bot's name, job and instructions become its system prompt. Needs `GOOGLE_GENERATIVE_AI_API_KEY`. Each reply's token counts (input, output, total) are saved in the message's `usage` column. A model error (including a 429 from the free tier) is shown in the chat as a readable, errored message and saved with status `error`. Limits: 8000 characters per message, the last 30 messages sent to the model, 10 messages per user per minute (in memory, so per server instance) |
+| Bot replies              | Done        | `POST /api/chat` checks who you are, saves your message, creates a run and queues it; it returns the run's ID, not the reply. A Trigger.dev task (`execute-run`) then loads the bot and the last 30 messages, calls the model and writes the reply. The bot's name, job and instructions become its system prompt, and each reply's token counts are saved in the message's `usage` column. Needs `GOOGLE_GENERATIVE_AI_API_KEY` and `TRIGGER_SECRET_KEY`; without a valid Trigger.dev key the chat says replies aren't set up. Limits: 8000 characters per message, 10 messages per user per minute (in memory, so per server instance), one unfinished reply per chat, 2 minutes per reply |
 | Bot screen panel         | Placeholder | The monitor button opens a side panel on one-on-one chats; the bot's live screen isn't connected yet |
-| Background tasks         | In progress | Trigger.dev is set up with one sample task (`hello-world`); bot replies don't run on it yet |
-| Automated tests          | Done        | `npm test` runs the Vitest suite: chat logic, rate limiting, bot faces and owner-scoped database access |
+| Durable runs             | Done        | Runs are rows in the `runs` table (`queued`, `running`, `done`, `error`, `cancelled`). The reply appears on screen as it is written: through Trigger.dev realtime when available, otherwise by reading `/api/runs/[id]` about once a second. Reloading the page picks the reply up where it is. Stop keeps the text that arrived. A 429 from the model is retried with backoff (3 attempts), a network error once, other errors not at all; a failed reply is saved with a readable message. A run that never finishes is marked failed when the chat is next opened or written to. Deleting a chat stops its run. Not yet proven against the real Trigger.dev service (see `scripts/smoke-trigger.ts`) |
+| Automated tests          | Done        | `npm test` runs the Vitest suite against the dev database: runs (retries, stop, timeouts, stuck runs, idempotent retries), the chat route and polling, ownership checks, chat logic, rate limiting and bot faces |
 | Group chats              | Done        | The "New group chat" dialog saves a named chat with the chosen bots and opens it; group chats are listed in the sidebar and reopen with their messages. Start a message with `@name` to pick which bot answers; with no mention, the bot that spoke last answers |
 
 ## Running locally
@@ -55,7 +55,7 @@ Create `.env.local` before starting. It needs these variables (names only; value
 | `DATABASE_URL_UNPOOLED`                                                                               | Neon direct (non-pooled) connection string       |
 | `NEON_BRANCH`                                                                                         | Neon branch the variables were pulled for        |
 | `GOOGLE_GENERATIVE_AI_API_KEY`                                                                        | Google Gemini API key for bot replies (get one at <https://aistudio.google.com/apikey>) |
-| `TRIGGER_SECRET_KEY`                                                                                  | Trigger.dev secret key for the environment (optional until background tasks are used) |
+| `TRIGGER_SECRET_KEY`                                                                                  | Trigger.dev secret key for the environment (the Development one starts with `tr_dev_`). Needed for bot replies; copy the full key from the project's API keys page, not a masked one |
 
 To get the Neon variables, run `npx neon@latest login`, then `npx neon@latest link` and pick the `bro-pilot` project. The link command writes them to `.env.local`.
 
@@ -63,21 +63,23 @@ Database: edit `lib/db/schema.ts`, then run `npm run db:push` to apply it to Neo
 
 Tests: `npm test` runs the Vitest suite. It reads `.env.local` and uses the database in `DATABASE_URL`, creating rows under throwaway user IDs and deleting them afterwards. It never calls the real model.
 
-Background tasks: `npx trigger.dev@latest dev` runs the tasks in `src/trigger` locally (run `npx trigger.dev@latest login` once first).
+Bot replies run as Trigger.dev tasks, so keep `npx trigger.dev@latest dev` running in a second terminal next to `npm run dev` (run `npx trigger.dev@latest login` once first). It reads `.env.local` too. Without it, a message is saved and its reply stays queued until the worker starts; after about two minutes it is marked as failed.
+
+Smoke checks against real services, run by hand: `npx tsx scripts/smoke-gemini.ts` sends one real message through the model and the database, and `npx tsx scripts/smoke-trigger.ts` checks the Trigger.dev key (add `--full` with the worker running for a whole reply).
 
 Other scripts: `npm run build`, `npm run start`, `npm run lint`, `npm run typecheck` and `npm run format`. Add UI components with `npx shadcn@latest add <component>`.
 
 ## Project structure
 
 ```
-app/              App Router: root layout, home page (/), bot chat (/chat/[id]), open-a-bot redirect (/bot/[id]), the chat API (/api/chat), /sign-in and /sign-up
-components/       App shell, sidebar, chat view, bot dialogs and bot avatar; components/ai-elements is the AI Elements chat UI; components/ui holds the shadcn/ui components
+app/              App Router: root layout, home page (/), bot chat (/chat/[id]), open-a-bot redirect (/bot/[id]), the chat API (/api/chat starts a run, /api/runs/[id] reports on it), /sign-in and /sign-up
+components/       App shell, sidebar, chat view, run follower (live progress), bot dialogs and bot avatar; components/ai-elements is the AI Elements chat UI; components/ui holds the shadcn/ui components
 hooks/            Shared React hooks
-lib/              Shared utilities; lib/ai.ts holds the model (one constant), limits and the system prompt, lib/chat-reply.ts saves a message and streams the reply, lib/rate-limit.ts is the per-user limiter, lib/chat-store.ts holds the chat and message queries (each scoped to the owner), lib/chats.ts and lib/bots.ts are the signed-in read helpers, lib/actions.ts has the server actions, lib/db has the Drizzle client and schema (bots, chats, chat_bots, messages), lib/bot-faces.ts lists the bot faces
+lib/              Shared code. lib/agent runs bot replies: start-run.ts accepts a message and queues a run, execute-run.ts produces the reply (the one place that logic lives), run-model.ts builds the prompt and calls the model, run-store.ts holds the run queries. lib/providers holds outside services behind small interfaces (run-queue.ts is Trigger.dev). lib/ai.ts has the model (one constant), limits and error messages; lib/run-progress.ts and lib/chat-messages.ts are how the browser follows a run; lib/rate-limit.ts is the per-user limiter; lib/chat-store.ts holds the chat and message queries (each scoped to the owner); lib/chats.ts and lib/bots.ts are the signed-in read helpers; lib/actions.ts has the server actions; lib/db has the Drizzle client and schema (bots, chats, chat_bots, messages, runs); lib/bot-faces.ts lists the bot faces
 public/           Static assets; public/bots holds the 50 bot face images (SVG)
-src/trigger/      Trigger.dev tasks
-test/             Vitest tests; test/fakes holds in-memory stand-ins (fake model), test/helpers the database helpers
-scripts/          Scripts run by hand with `npx tsx`; scripts/env.ts loads .env.local for them
+src/trigger/      Trigger.dev tasks; execute-run.ts wraps lib/agent/execute-run.ts
+test/             Vitest tests; test/fakes holds in-memory stand-ins (fake model, fake run queue), test/helpers the database and sign-in helpers
+scripts/          Scripts run by hand with `npx tsx`: smoke checks against real services; scripts/env.ts loads .env.local for them
 proxy.ts          Clerk middleware (Next.js proxy)
 neon.ts           Neon configuration (services and branch policy)
 drizzle.config.ts Drizzle Kit configuration (used by db:push)
@@ -89,3 +91,5 @@ vitest.config.ts  Vitest configuration
 ## Deployment
 
 Deployed on Railway from this repository: https://bro-pilot-production.up.railway.app
+
+Bot replies need two more things in production that are not set up yet: the `execute-run` task deployed to Trigger.dev (`npx trigger.dev@latest deploy`), with `DATABASE_URL` and `GOOGLE_GENERATIVE_AI_API_KEY` set in the Trigger.dev environment, and the production `TRIGGER_SECRET_KEY` set on Railway.

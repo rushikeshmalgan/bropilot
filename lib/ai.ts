@@ -16,32 +16,31 @@ export const MAX_HISTORY_MESSAGES = 30
 export const RATE_LIMIT_MAX_MESSAGES = 10
 export const RATE_LIMIT_WINDOW_MS = 60_000
 
+// The longest a run may take from start to finish, retries included.
+export const MAX_RUN_DURATION_MS = 2 * 60_000
+// A 429 is retried with exponential backoff: this long, then twice as long.
+export const MODEL_RETRY_BASE_MS = 2000
+// Attempts in total when the model keeps answering 429.
+export const MAX_RATE_LIMIT_ATTEMPTS = 3
+// How often a run saves its progress and checks whether it was stopped.
+export const RUN_PROGRESS_INTERVAL_MS = 1000
+
 export const BUSY_MESSAGE = "The model is busy, try again in a minute."
 export const RATE_LIMITED_MESSAGE =
   "You're sending messages too quickly. Try again in a minute."
 export const GENERIC_ERROR_MESSAGE =
   "Something went wrong with that reply. Try again."
-
-type PromptBot = { name: string; job: string; instructions: string | null }
-
-// A bot's persona comes from its name, job and instructions.
-export function buildSystemPrompt(bot: PromptBot, otherBotNames: string[]) {
-  return [
-    `You are ${bot.name}, an AI assistant. Your job: ${bot.job}.`,
-    bot.instructions?.trim()
-      ? `How you should work:\n${bot.instructions.trim()}`
-      : null,
-    otherBotNames.length > 0
-      ? `You are in a group chat with the user and these other bots: ${otherBotNames.join(", ")}. Reply only as ${bot.name}. Messages from other bots are shown with their name in front.`
-      : null,
-    "Be helpful and concise. Follow the instructions above exactly, including any limits on length or format.",
-  ]
-    .filter(Boolean)
-    .join("\n\n")
-}
+export const RUN_TIMEOUT_MESSAGE =
+  "The reply took too long and was stopped. Try again."
+export const CHAT_BUSY_MESSAGE =
+  "The bot is still replying. Wait for it to finish, or stop it."
+export const NOT_CONFIGURED_MESSAGE =
+  "Bot replies aren't set up on this server yet: TRIGGER_SECRET_KEY is missing or isn't a Trigger.dev secret key."
+export const ENQUEUE_FAILED_MESSAGE =
+  "Couldn't start the reply. Try again in a moment."
 
 // Looks through an error and the errors inside it for an HTTP status code.
-function findStatusCode(error: unknown, depth = 0): number | undefined {
+export function findStatusCode(error: unknown, depth = 0): number | undefined {
   if (!error || typeof error !== "object" || depth > 4) {
     return undefined
   }
@@ -98,4 +97,44 @@ export function describeModelError(error: unknown): string {
   }
 
   return GENERIC_ERROR_MESSAGE
+}
+
+// What to do after a failed model call.
+// - rate_limit: a 429; retry with backoff, up to MAX_RATE_LIMIT_ATTEMPTS
+// - retry_once: a network failure or a 5xx; worth one more try
+// - fatal: any other 4xx, or an error we don't recognise; retrying won't help
+export type ModelErrorKind = "rate_limit" | "retry_once" | "fatal"
+
+function looksLikeNetworkError(error: unknown, depth = 0): boolean {
+  if (!error || typeof error !== "object" || depth > 4) {
+    return false
+  }
+
+  const record = error as Record<string, unknown>
+  const code = typeof record.code === "string" ? record.code : ""
+  if (/^(ECONN|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|EPIPE|UND_ERR)/.test(code)) {
+    return true
+  }
+  if (
+    /fetch failed|network|socket hang up|connection (reset|closed)/i.test(
+      errorText(error)
+    )
+  ) {
+    return true
+  }
+
+  return looksLikeNetworkError(record.cause, depth + 1)
+}
+
+export function classifyModelError(error: unknown): ModelErrorKind {
+  const status = findStatusCode(error)
+
+  if (status === 429 || /RESOURCE_EXHAUSTED/i.test(errorText(error))) {
+    return "rate_limit"
+  }
+  if (status !== undefined) {
+    return status >= 500 ? "retry_once" : "fatal"
+  }
+
+  return looksLikeNetworkError(error) ? "retry_once" : "fatal"
 }

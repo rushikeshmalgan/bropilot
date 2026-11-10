@@ -4,13 +4,25 @@ import { auth } from "@clerk/nextjs/server"
 import { revalidatePath } from "next/cache"
 
 import {
+  cancelActiveRuns,
+  cancelRun,
+  getRunWithMessage,
+} from "@/lib/agent/run-store"
+import { liveAccess } from "@/lib/agent/start-run"
+import {
   MAX_GROUP_BOTS,
   MAX_TITLE_LENGTH,
   insertChat,
   removeChat,
 } from "@/lib/chat-store"
+import {
+  isActiveRunStatus,
+  type RunHandle,
+  type RunSnapshot,
+} from "@/lib/chat-types"
 import { db } from "@/lib/db"
 import { bots } from "@/lib/db/schema"
+import { getRunQueue } from "@/lib/providers"
 
 type CreateBotInput = {
   name: string
@@ -135,10 +147,75 @@ export async function deleteChat(
     return { error: "That chat doesn't exist." }
   }
 
+  // Stop any reply that is still being written, so no worker keeps going for
+  // a chat that no longer exists.
+  await cancelActiveRuns(userId, chatId)
+
   if (!(await removeChat(userId, chatId))) {
     return { error: "That chat doesn't exist." }
   }
 
   refreshChatList()
   return { ok: true }
+}
+
+function validId(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= 64
+}
+
+// Stops a reply that is being written. Text that already arrived is kept.
+// Returns where the run ended up, which may be "done" if it finished first.
+export async function stopRun(
+  runId: string
+): Promise<{ run: RunSnapshot } | { error: string }> {
+  const { userId } = await auth()
+  if (!userId) {
+    return { error: "You need to be signed in." }
+  }
+  if (!validId(runId)) {
+    return { error: "That reply doesn't exist." }
+  }
+
+  // Only the chat's owner can stop its run.
+  const run = await cancelRun(userId, runId)
+  if (!run) {
+    return { error: "That reply doesn't exist." }
+  }
+
+  refreshChatList()
+  return { run }
+}
+
+// Called when a chat page loads with a reply still being written, so the
+// screen can pick it up where it is. Returns the run's saved state, and a
+// handle for following it if it's still unfinished. Null if the run isn't in
+// one of this user's chats.
+export async function attachRun(
+  runId: string
+): Promise<{ run: RunHandle | null; snapshot: RunSnapshot } | null> {
+  const { userId } = await auth()
+  if (!userId || !validId(runId)) {
+    return null
+  }
+
+  // Scoped to the user: a run in someone else's chat doesn't exist here.
+  const found = await getRunWithMessage(userId, runId)
+  if (!found) {
+    return null
+  }
+
+  const { run, snapshot } = found
+  if (!isActiveRunStatus(run.status)) {
+    return { run: null, snapshot }
+  }
+
+  return {
+    run: {
+      runId: run.id,
+      assistantMessageId: run.assistantMessageId,
+      botId: run.botId,
+      live: await liveAccess(getRunQueue(), run.triggerRunId),
+    },
+    snapshot,
+  }
 }

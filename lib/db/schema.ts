@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm"
 import {
   index,
   jsonb,
@@ -5,6 +6,7 @@ import {
   primaryKey,
   text,
   timestamp,
+  uniqueIndex,
 } from "drizzle-orm/pg-core"
 import { nanoid } from "nanoid"
 
@@ -119,3 +121,52 @@ export const messages = pgTable(
 
 export type Chat = typeof chats.$inferSelect
 export type Message = typeof messages.$inferSelect
+
+// A run is one bot reply being produced in the background.
+// - queued: saved and handed to the task queue
+// - running: a worker is producing the reply
+// - done / error / cancelled: finished; these never change again
+export type RunStatus = "queued" | "running" | "done" | "error" | "cancelled"
+
+export const ACTIVE_RUN_STATUSES = ["queued", "running"] as const
+
+export const runs = pgTable(
+  "runs",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => nanoid()),
+    chatId: text("chat_id")
+      .notNull()
+      .references(() => chats.id, { onDelete: "cascade" }),
+    botId: text("bot_id")
+      .notNull()
+      .references(() => bots.id, { onDelete: "cascade" }),
+    // The message this run answers.
+    userMessageId: text("user_message_id").notNull(),
+    // Chosen when the run is created, so a retried run writes to the same
+    // message instead of adding a second one. The row itself is created when
+    // the run starts.
+    assistantMessageId: text("assistant_message_id").notNull(),
+    // The task queue's own ID for this run (a Trigger.dev run ID).
+    triggerRunId: text("trigger_run_id"),
+    status: text("status").$type<RunStatus>().notNull().default("queued"),
+    // A message that is safe to show the user; set when status is "error".
+    error: text("error"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    startedAt: timestamp("started_at", { withTimezone: true }),
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
+  },
+  (table) => [
+    index("runs_chat_id_status_idx").on(table.chatId, table.status),
+    // A chat has at most one unfinished run. The database enforces it, so two
+    // sends at the same moment can't both start a reply.
+    uniqueIndex("runs_one_active_per_chat_idx")
+      .on(table.chatId)
+      .where(sql`${table.status} in ('queued', 'running')`),
+  ]
+)
+
+export type Run = typeof runs.$inferSelect

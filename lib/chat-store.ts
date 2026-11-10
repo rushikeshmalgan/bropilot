@@ -10,13 +10,7 @@ import {
   MAX_MESSAGE_LENGTH,
   MAX_TITLE_LENGTH,
 } from "@/lib/chat-limits"
-import {
-  bots,
-  chatBots,
-  chats,
-  messages,
-  type MessageUsage,
-} from "@/lib/db/schema"
+import { bots, chatBots, chats, messages } from "@/lib/db/schema"
 
 export const DEFAULT_CHAT_TITLE = "New chat"
 export { MAX_GROUP_BOTS, MAX_MESSAGE_LENGTH, MAX_TITLE_LENGTH }
@@ -160,35 +154,6 @@ export async function insertChat(
   return id
 }
 
-// Saves a message the user wrote. Returns null if the chat isn't theirs.
-export async function insertUserMessage(
-  userId: string,
-  chatId: string,
-  text: string
-) {
-  const chat = await selectChat(userId, chatId)
-  if (!chat) {
-    return null
-  }
-
-  // A one-on-one chat is named after its first message.
-  const retitle = chat.botId !== null && chat.title === DEFAULT_CHAT_TITLE
-  const title = retitle ? text.slice(0, MAX_TITLE_LENGTH) : chat.title
-
-  const [[message]] = await db.batch([
-    db
-      .insert(messages)
-      .values({ chatId, role: "user", parts: [{ type: "text", text }] })
-      .returning({ id: messages.id, createdAt: messages.createdAt }),
-    db
-      .update(chats)
-      .set({ updatedAt: new Date(), title })
-      .where(and(eq(chats.id, chatId), eq(chats.userId, userId))),
-  ])
-
-  return { id: message.id, createdAt: message.createdAt, retitled: retitle }
-}
-
 export async function removeChat(userId: string, chatId: string) {
   const deleted = await db
     .delete(chats)
@@ -196,47 +161,4 @@ export async function removeChat(userId: string, chatId: string) {
     .returning({ id: chats.id })
 
   return deleted.length > 0
-}
-
-// Saves a bot's reply to a chat the user owns. Returns false if the chat isn't
-// theirs. The ID is chosen by the caller so it can match the ID the browser saw
-// while the reply streamed in.
-export async function insertAssistantMessage(
-  userId: string,
-  input: {
-    id: string
-    chatId: string
-    botId: string
-    text: string
-    status: "done" | "error"
-    usage?: MessageUsage | null
-  }
-) {
-  const [owned] = await db
-    .select({ id: chats.id })
-    .from(chats)
-    .where(and(eq(chats.id, input.chatId), eq(chats.userId, userId)))
-    .limit(1)
-
-  if (!owned) {
-    return false
-  }
-
-  await db.batch([
-    db.insert(messages).values({
-      id: input.id,
-      chatId: input.chatId,
-      role: "assistant",
-      botId: input.botId,
-      parts: [{ type: "text", text: input.text }],
-      status: input.status,
-      usage: input.usage ?? null,
-    }),
-    db
-      .update(chats)
-      .set({ updatedAt: new Date() })
-      .where(and(eq(chats.id, input.chatId), eq(chats.userId, userId))),
-  ])
-
-  return true
 }

@@ -2,8 +2,6 @@
 
 import * as React from "react"
 import { useRouter } from "next/navigation"
-import { useChat } from "@ai-sdk/react"
-import { DefaultChatTransport } from "ai"
 import {
   MonitorIcon,
   PlusIcon,
@@ -36,6 +34,7 @@ import {
 } from "@/components/ai-elements/prompt-input"
 import { Shimmer } from "@/components/ai-elements/shimmer"
 import { BotAvatar } from "@/components/bot-avatar"
+import { RunFollower } from "@/components/run-follower"
 import {
   AlertDialog,
   AlertDialogCancel,
@@ -54,48 +53,32 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty"
 import { toast } from "@/components/ui/toast"
-import { deleteChat } from "@/lib/actions"
+import { attachRun, deleteChat, stopRun } from "@/lib/actions"
 import { MAX_MESSAGE_LENGTH } from "@/lib/chat-limits"
-import type { ChatUIMessage } from "@/lib/chat-types"
+import {
+  applyRunProgress,
+  applyRunSnapshot,
+  placeholderReply,
+} from "@/lib/chat-messages"
+import {
+  isActiveRunStatus,
+  textOfParts,
+  type ChatMessage,
+  type MessagePart,
+  type RunHandle,
+  type RunSnapshot,
+} from "@/lib/chat-types"
 import { cn } from "@/lib/utils"
 
 type ChatViewProps = {
   chat: { id: string; title: string; isGroup: boolean }
   bots: { id: string; name: string; job: string; avatar: string }[]
-  initialMessages?: ChatUIMessage[]
+  initialMessages?: ChatMessage[]
+  // A reply that was still being written when the page loaded.
+  activeRunId?: string | null
 }
 
-function textOf(message: ChatUIMessage) {
-  return message.parts
-    .map((part) => (part.type === "text" ? part.text : ""))
-    .join("")
-}
-
-// What to show when a request fails, and whether the user's message was never
-// saved. The server answers with JSON for requests it turned away (not signed
-// in, too many messages, ...); a failure while the reply streams is plain text.
-function describeError(error: Error): { message: string; unsaved: boolean } {
-  try {
-    const body = JSON.parse(error.message) as { error?: unknown }
-    if (typeof body.error === "string") {
-      return { message: body.error, unsaved: true }
-    }
-  } catch {
-    // Not JSON, so it came from the stream.
-  }
-
-  if (error instanceof TypeError) {
-    return {
-      message: "Couldn't reach the server. Check your connection and try again.",
-      unsaved: true,
-    }
-  }
-
-  return {
-    message: error.message || "Something went wrong. Try again.",
-    unsaved: false,
-  }
-}
+const SEND_FAILED = "Couldn't reach the server. Check your connection and try again."
 
 export function ChatView(props: ChatViewProps) {
   // The provider lets the view put text back in the box if a message is refused.
@@ -106,15 +89,40 @@ export function ChatView(props: ChatViewProps) {
   )
 }
 
-function ChatViewInner({ chat, bots, initialMessages = [] }: ChatViewProps) {
+function ChatViewInner({
+  chat,
+  bots,
+  initialMessages = [],
+  activeRunId = null,
+}: ChatViewProps) {
   const router = useRouter()
   const { textInput } = usePromptInputController()
   const [workspaceOpen, setWorkspaceOpen] = React.useState(false)
   const [deleteOpen, setDeleteOpen] = React.useState(false)
   const [deleting, setDeleting] = React.useState(false)
 
-  // The newest message and its text, kept for when a send is refused.
-  const lastSent = React.useRef("")
+  const [messages, setMessages] = React.useState(initialMessages)
+  // The reply being written right now, if any.
+  const [run, setRun] = React.useState<RunHandle | null>(null)
+  // True from pressing Send until the server has accepted the message.
+  const [sending, setSending] = React.useState(false)
+  const [stopping, setStopping] = React.useState(false)
+  // Why the last message wasn't accepted.
+  const [notice, setNotice] = React.useState<string | null>(null)
+
+  // When the server sends a fresh copy of the chat (after router.refresh),
+  // show it, so the list matches the database again. A copy that arrives
+  // while a reply is being written is older than what's on screen, so it is
+  // dropped; another one is requested as soon as the reply ends.
+  const [serverMessages, setServerMessages] = React.useState(initialMessages)
+  if (initialMessages !== serverMessages) {
+    setServerMessages(initialMessages)
+    if (!sending && run === null) {
+      setMessages(initialMessages)
+    }
+  }
+
+  // Puts refused text back in the box, unless the user has typed since.
   const restoreText = React.useRef<(text: string) => void>(() => {})
   React.useEffect(() => {
     restoreText.current = (text) => {
@@ -124,43 +132,55 @@ function ChatViewInner({ chat, bots, initialMessages = [] }: ChatViewProps) {
     }
   })
 
-  // Only the newest message is sent; the server loads the rest from the
-  // database, so history can't be forged from the browser.
-  const transport = React.useMemo(
-    () =>
-      new DefaultChatTransport({
-        api: "/api/chat",
-        prepareSendMessagesRequest: ({ id, messages }) => ({
-          body: { id, message: messages[messages.length - 1] },
-        }),
-      }),
-    []
+  const applySnapshot = React.useCallback(
+    (snapshot: RunSnapshot) => {
+      setMessages((current) => applyRunSnapshot(current, snapshot))
+      if (!isActiveRunStatus(snapshot.status)) {
+        // Finished: the list now shows exactly what was saved.
+        setRun((current) => (current?.runId === snapshot.id ? null : current))
+        setStopping(false)
+        // Reload the page's data too: the sidebar shows when the chat was
+        // last active, and another tab may have added messages.
+        router.refresh()
+      }
+    },
+    [router]
   )
 
-  const { messages, sendMessage, status, stop, error, setMessages } =
-    useChat<ChatUIMessage>({
-      id: chat.id,
-      messages: initialMessages,
-      transport,
-      onError: (failure) => {
-        // A message the server turned away wasn't saved: take it back out of
-        // the thread and give the text back to the user.
-        if (describeError(failure).unsaved) {
-          setMessages((current) =>
-            current[current.length - 1]?.role === "user"
-              ? current.slice(0, -1)
-              : current
-          )
-          restoreText.current(lastSent.current)
-        }
-      },
-    })
+  // The run being followed, readable from effects without re-running them.
+  const followedRunId = React.useRef<string | null>(null)
+  React.useEffect(() => {
+    followedRunId.current = run?.runId ?? null
+  })
 
-  const busy = status === "submitted" || status === "streaming"
-  const last = messages[messages.length - 1]
-  const thinking =
-    status === "submitted" ||
-    (status === "streaming" && last?.role === "assistant" && !textOf(last))
+  // On load, pick up a reply that was still being written. The server action
+  // checks that the run is in one of this user's chats.
+  React.useEffect(() => {
+    // Nothing to do if this screen started the run and is already following.
+    if (!activeRunId || followedRunId.current === activeRunId) {
+      return
+    }
+
+    let cancelled = false
+    attachRun(activeRunId)
+      .then((attached) => {
+        if (cancelled || !attached || followedRunId.current === activeRunId) {
+          return
+        }
+        if (attached.run) {
+          setRun(attached.run)
+        }
+        applySnapshot(attached.snapshot)
+      })
+      // If this fails the reply is still being written; a reload shows it.
+      .catch(() => {})
+
+    return () => {
+      cancelled = true
+    }
+  }, [activeRunId, applySnapshot])
+
+  const busy = sending || run !== null
 
   function handleSubmit({ text }: PromptInputMessage) {
     const trimmed = text.trim()
@@ -168,8 +188,83 @@ function ChatViewInner({ chat, bots, initialMessages = [] }: ChatViewProps) {
       return
     }
 
-    lastSent.current = trimmed
-    void sendMessage({ text: trimmed })
+    void send(trimmed)
+  }
+
+  async function send(text: string) {
+    setNotice(null)
+    setSending(true)
+
+    // Shown at once; swapped for the saved message when the server answers.
+    const pendingId = `pending-${Date.now()}`
+    setMessages((current) => [
+      ...current,
+      {
+        id: pendingId,
+        role: "user",
+        botId: null,
+        parts: [{ type: "text", text }],
+        status: "done",
+      },
+    ])
+
+    let refusal: string | null = null
+    try {
+      const response = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: chat.id, text }),
+      })
+      const body = (await response.json().catch(() => null)) as {
+        run?: RunHandle
+        userMessageId?: string
+        error?: string
+      } | null
+
+      if (response.ok && body?.run && body.userMessageId) {
+        const started = body.run
+        const userMessageId = body.userMessageId
+        setMessages((current) => [
+          ...current.map((message) =>
+            message.id === pendingId ? { ...message, id: userMessageId } : message
+          ),
+          placeholderReply(started),
+        ])
+        setRun(started)
+        // The sidebar shows the chat's title and time, which just changed.
+        router.refresh()
+      } else {
+        refusal = body?.error ?? "Something went wrong. Try again."
+      }
+    } catch {
+      refusal = SEND_FAILED
+    }
+
+    if (refusal) {
+      // The message wasn't saved: take it back out and return the text.
+      setMessages((current) =>
+        current.filter((message) => message.id !== pendingId)
+      )
+      restoreText.current(text)
+      setNotice(refusal)
+    }
+    setSending(false)
+  }
+
+  async function stop() {
+    if (!run || stopping) {
+      return
+    }
+
+    setStopping(true)
+    const result = await stopRun(run.runId)
+    if ("error" in result) {
+      setStopping(false)
+      toast.add({ title: "Couldn't stop the reply", description: result.error })
+      return
+    }
+
+    applySnapshot(result.run)
   }
 
   async function removeChat() {
@@ -188,13 +283,34 @@ function ChatViewInner({ chat, bots, initialMessages = [] }: ChatViewProps) {
 
   const bot = chat.isGroup ? null : bots[0]
   const heading = chat.isGroup ? chat.title : (bot?.name ?? chat.title)
+  // A reply with nothing in it yet is shown as "Thinking…"; one that is over
+  // and still empty has nothing to show.
   const visible = messages.filter(
-    (message) => message.role === "user" || textOf(message)
+    (message) =>
+      message.role === "user" ||
+      textOfParts(message.parts) ||
+      message.id === run?.assistantMessageId
   )
-  const empty = visible.length === 0 && !thinking && !error
+  const empty = visible.length === 0 && !notice
 
   return (
     <div className="flex min-h-0 flex-1">
+      {run && (
+        <RunFollower
+          key={run.runId}
+          run={run}
+          onSnapshot={applySnapshot}
+          onProgress={(parts: MessagePart[]) =>
+            setMessages((current) => applyRunProgress(current, run, parts))
+          }
+          onGone={() => {
+            setRun(null)
+            setStopping(false)
+            router.refresh()
+          }}
+        />
+      )}
+
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="flex h-14 shrink-0 items-center justify-between border-b px-4 max-md:pl-12">
           <div className="flex min-w-0 items-center gap-3">
@@ -263,21 +379,22 @@ function ChatViewInner({ chat, bots, initialMessages = [] }: ChatViewProps) {
           ) : (
             <Conversation className="min-h-0">
               <ConversationContent className="mx-auto w-full max-w-3xl gap-6 px-6 py-6">
-                {visible.map((message, index) => {
-                  if (message.metadata?.status === "error") {
+                {visible.map((message) => {
+                  if (message.status === "error") {
                     return (
-                      <ErrorBubble key={message.id} text={textOf(message)} />
+                      <ErrorBubble
+                        key={message.id}
+                        text={textOfParts(message.parts)}
+                      />
                     )
                   }
 
-                  const streamingThis =
-                    status === "streaming" && index === visible.length - 1
-
+                  const text = textOfParts(message.parts)
+                  const writing = message.id === run?.assistantMessageId
                   const speaker =
                     message.role === "assistant"
-                      ? (bots.find(
-                          (member) => member.id === message.metadata?.botId
-                        ) ?? bot)
+                      ? (bots.find((member) => member.id === message.botId) ??
+                        bot)
                       : null
 
                   const bubble = (
@@ -286,27 +403,26 @@ function ChatViewInner({ chat, bots, initialMessages = [] }: ChatViewProps) {
                       from={message.role}
                       className={speaker ? "max-w-full flex-1" : "max-w-[80%]"}
                     >
-                      {chat.isGroup &&
-                        message.role === "assistant" &&
-                        message.metadata?.botName && (
-                          <span className="px-1 text-xs text-muted-foreground">
-                            {message.metadata.botName}
-                          </span>
-                        )}
+                      {chat.isGroup && speaker && (
+                        <span className="px-1 text-xs text-muted-foreground">
+                          {speaker.name}
+                        </span>
+                      )}
                       <MessageContent
                         className={cn(
                           "group-[.is-user]:rounded-2xl group-[.is-user]:bg-foreground/22 group-[.is-user]:px-3 group-[.is-user]:py-2",
-                          "group-[.is-assistant]:rounded-2xl group-[.is-assistant]:bg-secondary group-[.is-assistant]:px-3 group-[.is-assistant]:py-2"
+                          "group-[.is-assistant]:rounded-2xl group-[.is-assistant]:bg-secondary group-[.is-assistant]:px-3 group-[.is-assistant]:py-2",
+                          writing && !text && "group-[.is-assistant]:w-fit"
                         )}
                       >
-                        {message.role === "assistant" ? (
-                          <MessageResponse isAnimating={streamingThis}>
-                            {textOf(message)}
+                        {message.role === "user" ? (
+                          <span className="whitespace-pre-wrap">{text}</span>
+                        ) : text ? (
+                          <MessageResponse isAnimating={writing}>
+                            {text}
                           </MessageResponse>
                         ) : (
-                          <span className="whitespace-pre-wrap">
-                            {textOf(message)}
-                          </span>
+                          <Shimmer>Thinking…</Shimmer>
                         )}
                       </MessageContent>
                     </Message>
@@ -317,7 +433,10 @@ function ChatViewInner({ chat, bots, initialMessages = [] }: ChatViewProps) {
                   }
 
                   return (
-                    <div key={message.id} className="flex max-w-[85%] items-start gap-2.5">
+                    <div
+                      key={message.id}
+                      className="flex max-w-[85%] items-start gap-2.5"
+                    >
                       <BotAvatar
                         name={speaker.name}
                         seed={speaker.avatar}
@@ -328,17 +447,7 @@ function ChatViewInner({ chat, bots, initialMessages = [] }: ChatViewProps) {
                   )
                 })}
 
-                {thinking && (
-                  <Message from="assistant" className="max-w-[80%]">
-                    <MessageContent className="group-[.is-assistant]:w-fit group-[.is-assistant]:rounded-2xl group-[.is-assistant]:bg-secondary group-[.is-assistant]:px-3 group-[.is-assistant]:py-2">
-                      <Shimmer>Thinking…</Shimmer>
-                    </MessageContent>
-                  </Message>
-                )}
-
-                {error && status === "error" && (
-                  <ErrorBubble text={describeError(error).message} />
-                )}
+                {notice && <ErrorBubble text={notice} />}
               </ConversationContent>
               <ConversationScrollButton />
             </Conversation>
@@ -369,7 +478,10 @@ function ChatViewInner({ chat, bots, initialMessages = [] }: ChatViewProps) {
               </PromptInputButton>
             </PromptInputTools>
             <PromptInputSubmit
-              status={status}
+              // "streaming" shows the Stop button; "submitted" a spinner.
+              status={
+                run && !stopping ? "streaming" : busy ? "submitted" : "ready"
+              }
               onStop={stop}
               // Not `disabled`: that would dim the whole composer.
               aria-disabled={!busy && !textInput.value.trim()}

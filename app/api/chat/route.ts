@@ -1,14 +1,19 @@
 import { auth } from "@clerk/nextjs/server"
 
-import { replyToMessage } from "@/lib/chat-reply"
+import { startRun } from "@/lib/agent/start-run"
 
-// Replies stream, so allow time for a long one.
-export const maxDuration = 60
-
-function fail(status: number, code: string, error: string) {
-  return Response.json({ error, code }, { status })
+function fail(
+  status: number,
+  code: string,
+  error: string,
+  headers?: HeadersInit
+) {
+  return Response.json({ error, code }, { status, headers })
 }
 
+// Saves the user's message and starts the bot's reply as a background run.
+// The reply itself isn't in this response: the browser follows the run by its
+// ID (see /api/runs/[id]).
 export async function POST(request: Request) {
   const { userId } = await auth()
   if (!userId) {
@@ -22,32 +27,24 @@ export async function POST(request: Request) {
     return fail(400, "bad_request", "That request wasn't valid.")
   }
 
-  // The browser sends the chat's ID and only the newest message; the earlier
-  // ones are loaded from the database so they can't be forged.
-  const { id, message } = (body ?? {}) as {
-    id?: unknown
-    message?: { role?: unknown; parts?: unknown }
-  }
-
-  if (
-    typeof id !== "string" ||
-    !id ||
-    message?.role !== "user" ||
-    !Array.isArray(message.parts)
-  ) {
+  // Only the chat's ID and the new text are accepted. Everything else the
+  // reply needs is loaded from the database, so it can't be forged.
+  const { id, text } = (body ?? {}) as { id?: unknown; text?: unknown }
+  if (typeof id !== "string" || !id || id.length > 64 || typeof text !== "string") {
     return fail(400, "bad_request", "That request wasn't valid.")
   }
 
-  const text = message.parts
-    .map((part: unknown) =>
-      part &&
-      typeof part === "object" &&
-      (part as { type?: unknown }).type === "text" &&
-      typeof (part as { text?: unknown }).text === "string"
-        ? (part as { text: string }).text
-        : ""
+  const result = await startRun({ userId, chatId: id, text })
+  if (!result.ok) {
+    return fail(
+      result.status,
+      result.code,
+      result.error,
+      result.retryAfterSeconds
+        ? { "Retry-After": String(result.retryAfterSeconds) }
+        : undefined
     )
-    .join("")
+  }
 
-  return replyToMessage({ userId, chatId: id, text })
+  return Response.json({ run: result.run, userMessageId: result.userMessageId })
 }

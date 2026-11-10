@@ -3,8 +3,8 @@ import { notFound } from "next/navigation"
 
 import { AppShell } from "@/components/app-shell"
 import { ChatView } from "@/components/chat-view"
-import type { ChatUIMessage } from "@/lib/chat-types"
-import { getChat, getMessages } from "@/lib/chats"
+import type { ChatMessage } from "@/lib/chat-types"
+import { loadChatPage } from "@/lib/chats"
 
 export default async function ChatPage({
   params,
@@ -17,10 +17,12 @@ export default async function ChatPage({
 
   // A chat that belongs to someone else is a 404, the same as one that doesn't
   // exist, so URLs can't be used to find out what exists.
-  const [chat, messages] = await Promise.all([getChat(id), getMessages(id)])
-  if (!chat) {
+  const page = await loadChatPage(id)
+  if (!page) {
     notFound()
   }
+
+  const { chat, messages, activeRun } = page
 
   return (
     <AppShell>
@@ -30,17 +32,16 @@ export default async function ChatPage({
         chat={{ id: chat.id, title: chat.title, isGroup: chat.botId === null }}
         bots={chat.bots}
         initialMessages={messages.map(
-          (message): ChatUIMessage => ({
+          (message): ChatMessage => ({
             id: message.id,
             role: message.role,
+            botId: message.botId,
             parts: message.parts,
-            metadata: {
-              botId: message.botId,
-              botName: chat.bots.find((bot) => bot.id === message.botId)?.name,
-              status: message.status === "error" ? "error" : "done",
-            },
+            status: message.status,
           })
         )}
+        // The screen reattaches to a reply that is still being written.
+        activeRunId={activeRun?.id ?? null}
       />
     </AppShell>
   )

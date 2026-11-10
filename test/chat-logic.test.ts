@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest"
 
 import { RATE_LIMIT_MAX_MESSAGES, RATE_LIMIT_WINDOW_MS } from "@/lib/ai"
 import { BOT_FACES, botFaceUrl, faceFor, randomBotFace } from "@/lib/bot-faces"
-import { pickBot, toModelMessages } from "@/lib/chat-reply"
+import { pickBot, toModelMessages } from "@/lib/agent/run-model"
 import { checkRateLimit } from "@/lib/rate-limit"
 
 const ada = { id: "a", name: "Ada", job: "x" }
