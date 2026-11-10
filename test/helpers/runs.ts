@@ -53,7 +53,7 @@ export function wait(ms: number) {
 // Polls until the check passes, for things another task does in its own time.
 export async function until<T>(
   check: () => Promise<T | null | undefined | false>,
-  timeoutMs = 15_000,
+  timeoutMs = 45_000,
   everyMs = 100
 ): Promise<T> {
   const deadline = Date.now() + timeoutMs

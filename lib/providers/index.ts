@@ -1,10 +1,12 @@
 // Where the app gets its outside services from. Each one is used only when its
 // environment variable holds a usable value; otherwise the getter returns null
 // and the feature shows a "not configured" state instead of failing.
+import { firecrawlProvider, type WebProvider } from "@/lib/providers/firecrawl"
 import { triggerRunQueue, type RunQueue } from "@/lib/providers/run-queue"
 
 type Providers = {
   runQueue: RunQueue | null
+  web: WebProvider | null
 }
 
 // Tests replace providers with in-memory fakes through this. The app itself
@@ -40,4 +42,14 @@ export function getRunQueue(): RunQueue | null {
   }
 
   return hasTriggerKey() ? triggerRunQueue : null
+}
+
+// Web search and page reading (Firecrawl), or null without FIRECRAWL_API_KEY.
+export function getWebProvider(): WebProvider | null {
+  if ("web" in overrides) {
+    return overrides.web ?? null
+  }
+
+  const key = usableSecret("FIRECRAWL_API_KEY")
+  return key ? firecrawlProvider(key) : null
 }

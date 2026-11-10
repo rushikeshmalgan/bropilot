@@ -7,9 +7,11 @@ export const model = google(MODEL_ID)
 
 // Limits.
 export const MAX_OUTPUT_TOKENS = 1024
-// The cap on model steps per reply. There are no tools yet, so this is 1 in
-// practice; it stays low so adding tools can't run up the free tier.
+// The cap on model steps per reply when the bot has no tools. One step is
+// all a plain reply needs; this stays low to protect the free tier.
 export const MAX_STEPS = 2
+// With tools, a reply needs room to call a few and then answer.
+export const MAX_STEPS_WITH_TOOLS = 6
 // How many of the most recent messages are sent to the model.
 export const MAX_HISTORY_MESSAGES = 30
 // Messages per user per window (in memory, so per server instance).
@@ -36,6 +38,8 @@ export const CHAT_BUSY_MESSAGE =
   "The bot is still replying. Wait for it to finish, or stop it."
 export const NOT_CONFIGURED_MESSAGE =
   "Bot replies aren't set up on this server yet: TRIGGER_SECRET_KEY is missing or isn't a Trigger.dev secret key."
+export const OUT_OF_STEPS_MESSAGE =
+  "I used my tools but ran out of steps before writing an answer. Ask me to continue."
 export const ENQUEUE_FAILED_MESSAGE =
   "Couldn't start the reply. Try again in a moment."
 

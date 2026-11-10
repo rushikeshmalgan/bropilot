@@ -20,8 +20,15 @@ export const executeRunTask = task({
   run: async (payload: { runId: string }) => {
     const result = await executeRun(payload.runId, {
       onProgress: (progress: RunProgress) => {
-        const fits = JSON.stringify(progress.parts).length <= MAX_LIVE_BYTES
-        metadata.set("progress", fits ? progress : { seq: progress.seq })
+        // Through JSON and back, so only plain data is published: tool input
+        // and output are whatever the model and the tools produced.
+        const serialized = JSON.stringify(progress)
+        metadata.set(
+          "progress",
+          serialized.length <= MAX_LIVE_BYTES
+            ? JSON.parse(serialized)
+            : { seq: progress.seq }
+        )
       },
     })
 

@@ -15,15 +15,21 @@ import {
   MAX_RATE_LIMIT_ATTEMPTS,
   MAX_RUN_DURATION_MS,
   MODEL_RETRY_BASE_MS,
+  OUT_OF_STEPS_MESSAGE,
   RUN_PROGRESS_INTERVAL_MS,
   RUN_TIMEOUT_MESSAGE,
   classifyModelError,
   describeModelError,
   findStatusCode,
 } from "@/lib/ai"
-import { runModel, textOf } from "@/lib/agent/run-model"
+import { runModel } from "@/lib/agent/run-model"
 import { failRun } from "@/lib/agent/run-store"
-import type { RunProgress } from "@/lib/chat-types"
+import { buildTools } from "@/lib/agent/tools"
+import {
+  MAX_TOOL_OUTPUT_CHARS,
+  isToolFailure,
+} from "@/lib/agent/tools/shared"
+import { textOfParts, type RunProgress } from "@/lib/chat-types"
 import { db } from "@/lib/db"
 import {
   bots,
@@ -35,7 +41,9 @@ import {
   type MessageUsage,
   type Run,
   type RunStatus,
+  type ToolPart,
 } from "@/lib/db/schema"
+import type { HostLookup } from "@/lib/net/url-safety"
 
 export type ExecuteRunDeps = {
   model?: LanguageModel
@@ -43,6 +51,8 @@ export type ExecuteRunDeps = {
   retryBaseMs?: number
   progressIntervalMs?: number
   maxDurationMs?: number
+  // Resolves host names for the URL safety check in web tools.
+  hostLookup?: HostLookup
   // Called with the reply so far each time it is saved, and once at the end.
   onProgress?: (progress: RunProgress) => void
 }
@@ -90,7 +100,26 @@ async function readUsage(result: {
   }
 }
 
-// Collects the reply as it streams in.
+// Tools cap their own output. This is a backstop for what gets saved, in case
+// one ever doesn't: a message row must stay small.
+function forStorage(output: unknown): unknown {
+  let serialized: string
+  try {
+    serialized = JSON.stringify(output) ?? "null"
+  } catch {
+    return { error: "The tool's output couldn't be saved." }
+  }
+
+  if (serialized.length <= MAX_TOOL_OUTPUT_CHARS * 2) {
+    return output
+  }
+  return {
+    truncated: true,
+    preview: serialized.slice(0, MAX_TOOL_OUTPUT_CHARS),
+  }
+}
+
+// Collects the reply as it streams in: text and tool calls, in order.
 class ReplyBuilder {
   parts: MessagePart[] = []
 
@@ -101,6 +130,35 @@ class ReplyBuilder {
     } else {
       this.parts.push({ type: "text", text })
     }
+  }
+
+  startTool(id: string, name: string, input: unknown) {
+    if (!this.tool(id)) {
+      this.parts.push({ type: "tool", id, name, input, state: "running" })
+    }
+  }
+
+  // A tool that returns { error } has failed, even though it didn't throw.
+  finishTool(id: string, output: unknown) {
+    const part = this.tool(id)
+    if (part) {
+      part.output = forStorage(output)
+      part.state = isToolFailure(output) ? "error" : "done"
+    }
+  }
+
+  failTool(id: string, message: string) {
+    const part = this.tool(id)
+    if (part) {
+      part.output = { error: message }
+      part.state = "error"
+    }
+  }
+
+  private tool(id: string): ToolPart | undefined {
+    return this.parts.find(
+      (part): part is ToolPart => part.type === "tool" && part.id === id
+    )
   }
 
   snapshot(): MessagePart[] {
@@ -250,6 +308,15 @@ export async function executeRun(
     return currentStatus()
   }
 
+  // The tools this bot has for this run. Who they act for comes from the
+  // database, never from the model.
+  const { tools, capabilities } = buildTools({
+    userId: context.chat.userId,
+    botId: run.botId,
+    runId: run.id,
+    hostLookup: deps.hostLookup,
+  })
+
   // One model call, streamed into the assistant message.
   const attemptOnce = async (): Promise<Attempt> => {
     const remaining = deadline - Date.now()
@@ -310,6 +377,8 @@ export async function executeRun(
         isGroup: context.chat.botId === null,
         history: context.history,
         model: deps.model,
+        tools,
+        capabilities,
         abortSignal: controller.signal,
       })
 
@@ -319,6 +388,17 @@ export async function executeRun(
         }
         if (part.type === "text-delta") {
           reply.addText(part.text)
+          dirty = true
+        } else if (part.type === "tool-call") {
+          reply.startTool(part.toolCallId, part.toolName, part.input)
+          dirty = true
+        } else if (part.type === "tool-result") {
+          reply.finishTool(part.toolCallId, part.output)
+          dirty = true
+        } else if (part.type === "tool-error") {
+          // The tool threw, or the model sent input the tool doesn't accept.
+          // The model is told, and the run carries on.
+          reply.failTool(part.toolCallId, "The tool call failed.")
           dirty = true
         } else if (part.type === "error") {
           streamError = part.error
@@ -374,9 +454,14 @@ export async function executeRun(
     }
 
     if (attempt.kind === "ok") {
-      if (!textOf({ parts: attempt.parts }).trim()) {
-        console.error(`Run ${run.id}: the model returned an empty reply`)
-        return fail(GENERIC_ERROR_MESSAGE)
+      if (!textOfParts(attempt.parts).trim()) {
+        if (!attempt.parts.some((part) => part.type === "tool")) {
+          console.error(`Run ${run.id}: the model returned an empty reply`)
+          return fail(GENERIC_ERROR_MESSAGE)
+        }
+        // It called tools until the step limit and never got to answer. Keep
+        // what the tools found and say what happened.
+        attempt.parts.push({ type: "text", text: OUT_OF_STEPS_MESSAGE })
       }
 
       // The run and its message finish together, and only if the run is still

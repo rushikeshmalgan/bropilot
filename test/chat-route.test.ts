@@ -137,7 +137,7 @@ describe("POST /api/chat and run following", () => {
   it("returns a run instead of a reply, and the reply arrives by polling", async () => {
     signInAs(owner)
     const chatId = await newChat(owner, bot.id)
-    const words = Array.from({ length: 30 }, (_, i) => `word${i} `)
+    const words = Array.from({ length: 80 }, (_, i) => `word${i} `)
     const model = fakeModel([{ text: words, chunkDelayMs: 100 }])
     const queue = fakeRunQueue({ deps: { ...FAST, model } })
     overrideProviders({ runQueue: queue })
@@ -277,7 +277,7 @@ describe("POST /api/chat and run following", () => {
     signInAs(second)
     const chatId = await newChat(second, secondBot.id)
     const model = fakeModel([
-      { text: Array.from({ length: 20 }, () => "tick "), chunkDelayMs: 100 },
+      { text: Array.from({ length: 600 }, () => "tick "), chunkDelayMs: 100 },
     ])
     const queue = fakeRunQueue({ deps: { ...FAST, model } })
     overrideProviders({ runQueue: queue })

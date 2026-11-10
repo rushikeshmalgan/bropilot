@@ -1,8 +1,13 @@
 // Types the browser and the server share. Nothing here touches the database,
 // so client components can import it.
-import type { MessagePart, MessageUsage, RunStatus } from "@/lib/db/schema"
+import type {
+  MessagePart,
+  MessageUsage,
+  RunStatus,
+  ToolPart,
+} from "@/lib/db/schema"
 
-export type { MessagePart, MessageUsage, RunStatus }
+export type { MessagePart, MessageUsage, RunStatus, ToolPart }
 
 // A message as the chat screen shows it.
 export type ChatMessage = {
@@ -49,6 +54,11 @@ export type RunProgress = {
   parts: MessagePart[]
 }
 
+// The words in a message, without its tool calls. Text written before and
+// after a tool call is separate, so it is joined as paragraphs.
 export function textOfParts(parts: readonly MessagePart[]) {
-  return parts.map((part) => (part.type === "text" ? part.text : "")).join("")
+  return parts
+    .filter((part) => part.type === "text")
+    .map((part) => part.text)
+    .join("\n\n")
 }

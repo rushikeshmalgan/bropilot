@@ -35,6 +35,7 @@ import {
 import { Shimmer } from "@/components/ai-elements/shimmer"
 import { BotAvatar } from "@/components/bot-avatar"
 import { RunFollower } from "@/components/run-follower"
+import { ToolCard } from "@/components/tool-card"
 import {
   AlertDialog,
   AlertDialogCancel,
@@ -288,7 +289,7 @@ function ChatViewInner({
   const visible = messages.filter(
     (message) =>
       message.role === "user" ||
-      textOfParts(message.parts) ||
+      message.parts.length > 0 ||
       message.id === run?.assistantMessageId
   )
   const empty = visible.length === 0 && !notice
@@ -412,17 +413,37 @@ function ChatViewInner({
                         className={cn(
                           "group-[.is-user]:rounded-2xl group-[.is-user]:bg-foreground/22 group-[.is-user]:px-3 group-[.is-user]:py-2",
                           "group-[.is-assistant]:rounded-2xl group-[.is-assistant]:bg-secondary group-[.is-assistant]:px-3 group-[.is-assistant]:py-2",
-                          writing && !text && "group-[.is-assistant]:w-fit"
+                          writing &&
+                            message.parts.length === 0 &&
+                            "group-[.is-assistant]:w-fit"
                         )}
                       >
                         {message.role === "user" ? (
                           <span className="whitespace-pre-wrap">{text}</span>
-                        ) : text ? (
-                          <MessageResponse isAnimating={writing}>
-                            {text}
-                          </MessageResponse>
-                        ) : (
+                        ) : message.parts.length === 0 ? (
                           <Shimmer>Thinking…</Shimmer>
+                        ) : (
+                          // Text and tool calls, in the order they happened.
+                          message.parts.map((part, index) =>
+                            part.type === "tool" ? (
+                              <ToolCard
+                                key={part.id}
+                                part={part}
+                                // A call still "running" in a reply that is
+                                // over was cut short by Stop.
+                                interrupted={!writing}
+                              />
+                            ) : (
+                              <MessageResponse
+                                key={index}
+                                isAnimating={
+                                  writing && index === message.parts.length - 1
+                                }
+                              >
+                                {part.text}
+                              </MessageResponse>
+                            )
+                          )
                         )}
                       </MessageContent>
                     </Message>

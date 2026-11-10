@@ -81,9 +81,24 @@ export const chatBots = pgTable(
   ]
 )
 
-// One part of a message. Text only for now; tool calls and other part types
-// can be added to this union without a schema change.
-export type MessagePart = { type: "text"; text: string }
+// A tool the bot called while writing a reply, with what it sent and got back.
+// - running: the call was made and hasn't returned yet
+// - done: `output` is the result
+// - error: the call failed; `output` is { error: "..." }
+export type ToolPart = {
+  type: "tool"
+  // The model's ID for this call; unique within the message.
+  id: string
+  // Which tool, for example "webSearch".
+  name: string
+  input: unknown
+  output?: unknown
+  state: "running" | "done" | "error"
+}
+
+// One part of a message, in the order it was written. New part types can be
+// added to this union without a schema change.
+export type MessagePart = { type: "text"; text: string } | ToolPart
 
 // Token counts for one model reply. A count is null when the provider didn't
 // report it.

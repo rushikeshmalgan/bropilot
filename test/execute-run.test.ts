@@ -272,7 +272,7 @@ describe("executeRun", () => {
   it("Stop keeps the text that arrived and nothing is written afterwards", async () => {
     const { userId, chatId } = await chatFor()
     const slow = fakeModel([
-      { text: Array.from({ length: 60 }, (_, i) => `w${i} `), chunkDelayMs: 100 },
+      { text: Array.from({ length: 600 }, (_, i) => `w${i} `), chunkDelayMs: 100 },
     ])
     const queue = fakeRunQueue({ deps: { ...FAST, model: slow } })
     overrideProviders({ runQueue: queue })
@@ -289,7 +289,7 @@ describe("executeRun", () => {
     expect(stopped?.message?.status).toBe("done")
     const kept = textOfParts(stopped!.message!.parts)
     expect(kept.length).toBeGreaterThan(0)
-    expect(kept.length).toBeLessThan(60 * 4)
+    expect(kept.length).toBeLessThan(600 * 4)
     // The queue was told to stop the worker.
     expect(queue.cancelled).toEqual(["fake_run_1"])
 
@@ -452,7 +452,7 @@ describe("executeRun", () => {
   it("deleting a chat stops its run, and the worker ends quietly", async () => {
     const { userId, chatId } = await chatFor()
     const slow = fakeModel([
-      { text: Array.from({ length: 50 }, () => "word "), chunkDelayMs: 100 },
+      { text: Array.from({ length: 600 }, () => "word "), chunkDelayMs: 100 },
     ])
     const queue = fakeRunQueue({ deps: { ...FAST, model: slow } })
     overrideProviders({ runQueue: queue })
