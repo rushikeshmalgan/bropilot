@@ -1,6 +1,7 @@
 "use client"
 
 import {
+  BrainIcon,
   CheckIcon,
   ChevronRightIcon,
   FileTextIcon,
@@ -35,6 +36,21 @@ const TOOLS: Record<
     label: "Read a page",
     icon: GlobeIcon,
     summary: (input) => text(input.url),
+  },
+  memoryList: {
+    label: "Looked through memory",
+    icon: BrainIcon,
+    summary: () => "",
+  },
+  memoryRead: {
+    label: "Read from memory",
+    icon: BrainIcon,
+    summary: (input) => text(input.path),
+  },
+  memoryWrite: {
+    label: "Saved to memory",
+    icon: BrainIcon,
+    summary: (input) => text(input.path),
   },
 }
 

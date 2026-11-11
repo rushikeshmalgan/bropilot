@@ -32,6 +32,7 @@ import {
 import { textOfParts, type RunProgress } from "@/lib/chat-types"
 import { db } from "@/lib/db"
 import {
+  botMemoryFiles,
   bots,
   chatBots,
   chats,
@@ -43,6 +44,7 @@ import {
   type RunStatus,
   type ToolPart,
 } from "@/lib/db/schema"
+import { MEMORY_INDEX_PATH, memoryIndexForPrompt } from "@/lib/memory"
 import type { HostLookup } from "@/lib/net/url-safety"
 
 export type ExecuteRunDeps = {
@@ -210,7 +212,7 @@ async function openAssistantMessage(run: Run) {
 
 // Everything the model needs, read fresh from the database.
 async function loadContext(run: Run) {
-  const [chatRows, participants, recent] = await Promise.all([
+  const [chatRows, participants, recent, indexRows] = await Promise.all([
     db.select().from(chats).where(eq(chats.id, run.chatId)).limit(1),
     db
       .select({
@@ -234,6 +236,17 @@ async function loadContext(run: Run) {
       )
       .orderBy(desc(messages.createdAt))
       .limit(MAX_HISTORY_MESSAGES),
+    // The answering bot's memory index, shown to it on every run.
+    db
+      .select({ content: botMemoryFiles.content })
+      .from(botMemoryFiles)
+      .where(
+        and(
+          eq(botMemoryFiles.botId, run.botId),
+          eq(botMemoryFiles.path, MEMORY_INDEX_PATH)
+        )
+      )
+      .limit(1),
   ])
 
   const chat = chatRows[0]
@@ -242,7 +255,13 @@ async function loadContext(run: Run) {
     return null
   }
 
-  return { chat, bot, participants, history: recent.reverse() }
+  return {
+    chat,
+    bot,
+    participants,
+    history: recent.reverse(),
+    memoryIndex: memoryIndexForPrompt(indexRows[0]?.content),
+  }
 }
 
 export async function executeRun(
@@ -379,6 +398,7 @@ export async function executeRun(
         model: deps.model,
         tools,
         capabilities,
+        memoryIndex: context.memoryIndex,
         abortSignal: controller.signal,
       })
 

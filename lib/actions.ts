@@ -22,6 +22,12 @@ import {
 } from "@/lib/chat-types"
 import { db } from "@/lib/db"
 import { bots } from "@/lib/db/schema"
+import {
+  deleteMemory,
+  readMemory,
+  writeMemory,
+  type MemoryFile,
+} from "@/lib/memory"
 import { getRunQueue } from "@/lib/providers"
 
 type CreateBotInput = {
@@ -218,4 +224,94 @@ export async function attachRun(
     },
     snapshot,
   }
+}
+
+// --- Bot memory (the Memory tab on a bot's settings page) ---
+//
+// Each of these checks who is signed in and passes that user's ID down; the
+// memory functions then only see bots that user owns.
+
+type MemoryActionError = {
+  error: string
+  // True when the file changed since it was opened: the screen offers to
+  // reload it instead of overwriting.
+  conflict?: boolean
+}
+
+function validMemoryPath(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= 200
+}
+
+export async function readMemoryFile(
+  botId: string,
+  path: string
+): Promise<{ file: MemoryFile } | MemoryActionError> {
+  const { userId } = await auth()
+  if (!userId) {
+    return { error: "You need to be signed in." }
+  }
+  if (!validId(botId) || !validMemoryPath(path)) {
+    return { error: "That memory file doesn't exist." }
+  }
+
+  const file = await readMemory(userId, botId, path)
+  return file ? { file } : { error: "That memory file doesn't exist." }
+}
+
+// Saves a file. expectedVersion is the version the editor loaded, or null for
+// a new file; a save based on an older version is refused.
+export async function saveMemoryFile(
+  botId: string,
+  input: { path: string; content: string; expectedVersion: number | null }
+): Promise<{ path: string; version: number } | MemoryActionError> {
+  const { userId } = await auth()
+  if (!userId) {
+    return { error: "You need to be signed in." }
+  }
+
+  const { path, content, expectedVersion } = input ?? {}
+  if (
+    !validId(botId) ||
+    !validMemoryPath(path) ||
+    typeof content !== "string" ||
+    !(
+      expectedVersion === null ||
+      (Number.isInteger(expectedVersion) && expectedVersion >= 1)
+    )
+  ) {
+    return { error: "That save wasn't valid." }
+  }
+
+  const result = await writeMemory(userId, botId, {
+    path,
+    content,
+    expectedVersion,
+  })
+  if (!result.ok) {
+    return { error: result.error, conflict: result.code === "conflict" }
+  }
+
+  revalidatePath(`/bot/${botId}/settings`)
+  return result.file
+}
+
+export async function deleteMemoryFile(
+  botId: string,
+  path: string
+): Promise<{ ok: true } | MemoryActionError> {
+  const { userId } = await auth()
+  if (!userId) {
+    return { error: "You need to be signed in." }
+  }
+  if (!validId(botId) || !validMemoryPath(path)) {
+    return { error: "That memory file doesn't exist." }
+  }
+
+  const result = await deleteMemory(userId, botId, path)
+  if (!result.ok) {
+    return { error: result.error }
+  }
+
+  revalidatePath(`/bot/${botId}/settings`)
+  return { ok: true }
 }

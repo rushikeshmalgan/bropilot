@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm"
 import {
   index,
+  integer,
   jsonb,
   pgTable,
   primaryKey,
@@ -185,3 +186,26 @@ export const runs = pgTable(
 )
 
 export type Run = typeof runs.$inferSelect
+
+// A bot's memory: small text files it keeps between chats. Each bot has its
+// own, and they go when the bot is deleted.
+export const botMemoryFiles = pgTable(
+  "bot_memory_files",
+  {
+    botId: text("bot_id")
+      .notNull()
+      .references(() => bots.id, { onDelete: "cascade" }),
+    // A relative path such as "index.md" or "people/rushi.md".
+    path: text("path").notNull(),
+    content: text("content").notNull(),
+    // Goes up by one on every save. A save names the version it started from
+    // and is refused if the file has changed since.
+    version: integer("version").notNull().default(1),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [primaryKey({ columns: [table.botId, table.path] })]
+)
+
+export type BotMemoryFile = typeof botMemoryFiles.$inferSelect

@@ -1,11 +1,13 @@
 "use client"
 
 import * as React from "react"
+import Link from "next/link"
 import { useRouter } from "next/navigation"
 import {
   MonitorIcon,
   PlusIcon,
   RefreshCwIcon,
+  SlidersHorizontalIcon,
   Trash2Icon,
   UsersIcon,
 } from "lucide-react"
@@ -335,6 +337,17 @@ function ChatViewInner({
             )}
           </div>
           <div className="flex items-center gap-1">
+            {bot && (
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label={`${bot.name}'s memory and settings`}
+                nativeButton={false}
+                render={<Link href={`/bot/${bot.id}/settings`} />}
+              >
+                <SlidersHorizontalIcon />
+              </Button>
+            )}
             <Button
               variant="ghost"
               size="icon-sm"
