@@ -8,6 +8,7 @@ import {
   FileTextIcon,
   FolderOpenIcon,
   GlobeIcon,
+  MonitorIcon,
   SearchIcon,
   TerminalIcon,
   TriangleAlertIcon,
@@ -60,6 +61,11 @@ const TOOLS: Record<
     icon: FolderOpenIcon,
     summary: (input) => text(input.path) || "home folder",
   },
+  computer: {
+    label: "Used the screen",
+    icon: MonitorIcon,
+    summary: (input) => describeScreenAction(input),
+  },
   memoryList: {
     label: "Looked through memory",
     icon: BrainIcon,
@@ -87,6 +93,24 @@ function text(value: unknown) {
   return typeof value === "string" ? value : ""
 }
 
+// "click (120, 340)", "type "hello"", "key Return" and so on.
+function describeScreenAction(input: Fields) {
+  const action = text(input.action)
+  const at =
+    typeof input.x === "number" && typeof input.y === "number"
+      ? ` (${input.x}, ${input.y})`
+      : ""
+
+  if (action === "type") {
+    const typed = text(input.text)
+    return `type "${typed.length > 40 ? `${typed.slice(0, 40)}…` : typed}"`
+  }
+  if (action === "key") {
+    return `key ${text(input.key)}`
+  }
+  return `${action.replace("_", " ")}${at}`
+}
+
 // What a card shows under "Sent". Commands and files read better as plain
 // text than as JSON with escaped line breaks.
 function sentText(name: string, input: unknown) {
@@ -112,6 +136,10 @@ function resultText(name: string, output: unknown) {
   }
   if (name === "readFile" && typeof result.content === "string") {
     return result.content
+  }
+  if (name === "computer" && typeof result.screen === "object") {
+    const size = fields(result.screen)
+    return `Done. The screen is ${String(size.width)} by ${String(size.height)} pixels. The picture is shown live in the screen panel and isn't saved here.`
   }
   return pretty(output)
 }

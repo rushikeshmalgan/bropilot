@@ -3,7 +3,8 @@
 //   npx tsx scripts/smoke-daytona.ts
 //
 // Needs DAYTONA_API_KEY. It creates one sandbox, runs a few commands in it,
-// writes and reads a file, stops and restarts it, then deletes it. The
+// writes and reads a file, stops and restarts it, starts the desktop and uses
+// its screen, then deletes it. The
 // sandbox is deleted even if a step fails. This uses a little of your Daytona
 // compute (well under a minute of one small sandbox).
 import "./env"
@@ -17,7 +18,7 @@ function fail(message: string): never {
   process.exit(1)
 }
 
-function check(condition: unknown, message: string) {
+function check(condition: unknown, message: string): asserts condition {
   if (!condition) {
     fail(message)
   }
@@ -118,6 +119,62 @@ async function main() {
     const kept = await provider.readFile(sandboxId, "smoke/note.txt", 1000)
     check(kept.toString() === "remember me", "the file was lost over a stop and start")
     console.log("ok   stopped and restarted it; the file survived")
+
+    // --- The desktop (docs/computer-use.md, "What I'm unsure about") ---
+    const desktop = provider.desktop
+    await desktop.start(sandboxId).catch((error: unknown) => {
+      fail(
+        `the desktop didn't start: ${error instanceof Error ? error.message : error}. If the default sandbox image has no desktop, set DAYTONA_SNAPSHOT to a snapshot that does.`
+      )
+    })
+    check((await desktop.status(sandboxId)) === "running", "the desktop isn't running after start")
+    console.log("ok   started the desktop; its status words are understood")
+
+    const shot = await desktop.screenshot(sandboxId)
+    check(
+      shot.width > 100 && shot.height > 100 && shot.base64.length > 1000,
+      "the screenshot is empty or too small"
+    )
+    console.log(`ok   took a PNG screenshot, ${shot.width} by ${shot.height} pixels`)
+
+    await desktop.move(sandboxId, Math.floor(shot.width / 2), Math.floor(shot.height / 2))
+    await desktop.click(sandboxId, Math.floor(shot.width / 2), Math.floor(shot.height / 2))
+    await desktop.scroll(sandboxId, 10, 10, "down", 1)
+    await desktop.type(sandboxId, "x")
+    await desktop.press(sandboxId, "Escape").catch((error: unknown) => {
+      fail(
+        `the key "Escape" wasn't accepted (${error instanceof Error ? error.message : error}): the key names need checking`
+      )
+    })
+    console.log("ok   move, click, scroll, type and a key press were accepted")
+
+    const viewing = await desktop.viewerUrl(sandboxId, {
+      expiresInSeconds: 120,
+      viewOnly: true,
+    })
+    const viewer = new URL(viewing)
+    check(viewer.pathname.endsWith("vnc.html"), "the viewer address doesn't end in vnc.html")
+    check(viewer.searchParams.get("view_only") === "true", "the address isn't view-only")
+    // Only facts about the address are printed, never the address itself: it
+    // carries the token that lets anyone watch the screen.
+    console.log(
+      `ok   made a viewer address (host contains the sandbox id: ${viewer.host.includes(sandboxId) ? "YES" : "no"})`
+    )
+
+    const page = await fetch(viewing, { redirect: "follow" }).catch(() => null)
+    check(page, "the viewer address couldn't be fetched")
+    check(page.ok, `the viewer page answered ${page.status}`)
+    const frameOptions = page.headers.get("x-frame-options")
+    const csp = page.headers.get("content-security-policy") ?? ""
+    const frameAncestors = /frame-ancestors[^;]*/i.exec(csp)?.[0] ?? null
+    console.log(
+      `ok   the viewer page loads (x-frame-options: ${frameOptions ?? "none"}; ${frameAncestors ?? "no frame-ancestors rule"})`
+    )
+    if (frameOptions || frameAncestors) {
+      console.log(
+        "WARN the provider's page may refuse to be shown inside another page: check the viewer in the browser before relying on it"
+      )
+    }
   } finally {
     if (sandboxId) {
       await provider.delete(sandboxId).catch((error: unknown) => {

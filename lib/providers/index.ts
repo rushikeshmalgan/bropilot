@@ -70,9 +70,21 @@ export function getSandboxProvider(): SandboxProvider | null {
     return null
   }
 
-  // One provider per key, so its client is made once.
-  if (daytona?.key !== key) {
-    daytona = { key, provider: daytonaProvider(key) }
+  // An optional snapshot to make sandboxes from (for a desktop image). Only
+  // plain snapshot names are accepted.
+  const snapshot = process.env.DAYTONA_SNAPSHOT?.trim()
+  const validSnapshot =
+    snapshot && /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$/.test(snapshot)
+      ? snapshot
+      : undefined
+
+  // One provider per key and snapshot, so its client is made once.
+  const identity = `${key}|${validSnapshot ?? ""}`
+  if (daytona?.key !== identity) {
+    daytona = {
+      key: identity,
+      provider: daytonaProvider(key, { snapshot: validSnapshot }),
+    }
   }
   return daytona.provider
 }

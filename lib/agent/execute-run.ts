@@ -121,6 +121,19 @@ function forStorage(output: unknown): unknown {
   }
 }
 
+// A screenshot goes to the model and nowhere else: it is big, and it can show
+// anything. What is saved says an image was taken.
+function withoutImage(output: unknown): unknown {
+  if (
+    typeof output === "object" &&
+    output !== null &&
+    typeof (output as { image?: unknown }).image === "string"
+  ) {
+    return { ...output, image: "(screenshot not saved)" }
+  }
+  return output
+}
+
 // Collects the reply as it streams in: text and tool calls, in order.
 class ReplyBuilder {
   parts: MessagePart[] = []
@@ -144,7 +157,7 @@ class ReplyBuilder {
   finishTool(id: string, output: unknown) {
     const part = this.tool(id)
     if (part) {
-      part.output = forStorage(output)
+      part.output = forStorage(withoutImage(output))
       part.state = isToolFailure(output) ? "error" : "done"
     }
   }

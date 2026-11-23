@@ -12,6 +12,8 @@ export const MAX_OUTPUT_TOKENS = 1024
 export const MAX_STEPS = 2
 // With tools, a reply needs room to call a few and then answer.
 export const MAX_STEPS_WITH_TOOLS = 6
+// With a screen to use, a reply is a series of look, act, look steps.
+export const MAX_STEPS_WITH_COMPUTER = 24
 // How many of the most recent messages are sent to the model.
 export const MAX_HISTORY_MESSAGES = 30
 // Messages per user per window (in memory, so per server instance).
@@ -19,7 +21,7 @@ export const RATE_LIMIT_MAX_MESSAGES = 10
 export const RATE_LIMIT_WINDOW_MS = 60_000
 
 // The longest a run may take from start to finish, retries included.
-export const MAX_RUN_DURATION_MS = 2 * 60_000
+export const MAX_RUN_DURATION_MS = 5 * 60_000
 // A 429 is retried with exponential backoff: this long, then twice as long.
 export const MODEL_RETRY_BASE_MS = 2000
 // Attempts in total when the model keeps answering 429.

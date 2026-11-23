@@ -14,6 +14,8 @@ import {
   SandboxProviderError,
   type CreateSandboxInput,
   type CreatedSandbox,
+  type DesktopProvider,
+  type DesktopState,
   type ExecOptions,
   type ExecResult,
   type SandboxEntry,
@@ -40,7 +42,8 @@ export const BOT_LABEL = "bro-pilot-bot"
 const RUNNING = new Set(["started"])
 const STOPPED = new Set(["stopped", "archived", "paused"])
 const BROKEN = new Set(["error", "build_failed"])
-const GONE = new Set(["destroyed", "destroying"])
+const GONE = new Set(["destroyed"])
+const DELETING = new Set(["destroying"])
 
 function stateOf(raw: string | undefined): SandboxState {
   if (!raw) {
@@ -58,8 +61,49 @@ function stateOf(raw: string | undefined): SandboxState {
   if (GONE.has(raw)) {
     return "missing"
   }
+  if (DELETING.has(raw)) {
+    return "deleting"
+  }
   return "transitioning"
 }
+
+// The desktop service reports a status word. The SDK doesn't list the words,
+// so unknown ones are treated as an error (and logged) rather than guessed at.
+function desktopStateOf(raw: string | undefined): DesktopState {
+  const word = (raw ?? "").toLowerCase()
+  if (word === "active" || word === "running") {
+    return "running"
+  }
+  if (word === "inactive" || word === "stopped" || word === "") {
+    return "stopped"
+  }
+  if (word === "partial" || word === "starting") {
+    return "starting"
+  }
+
+  console.error(`Unexpected desktop status word: ${word.slice(0, 40)}`)
+  return "error"
+}
+
+// The width and height written in a PNG file's first chunk, or null if these
+// bytes aren't a PNG.
+export function pngSize(bytes: Buffer): { width: number; height: number } | null {
+  const signature = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]
+  if (bytes.length < 24 || signature.some((byte, i) => bytes[i] !== byte)) {
+    return null
+  }
+
+  const width = bytes.readUInt32BE(16)
+  const height = bytes.readUInt32BE(20)
+  return width > 0 && height > 0 ? { width, height } : null
+}
+
+// noVNC, the browser viewer the desktop serves.
+const VIEWER_PORT = 6080
+const VIEWER_PATH = "vnc.html"
+// How long to wait for the desktop's processes to come up, and how often to look.
+const DESKTOP_START_WAIT_MS = 45_000
+const DESKTOP_POLL_MS = 1_500
 
 // Turns whatever the SDK threw into an error with a message that is safe to
 // show. The SDK's own messages can contain URLs and internals, so they are
@@ -101,7 +145,11 @@ function isTimeout(error: unknown) {
   return /Timeout/i.test(name) || /timed? ?out|timeout/i.test(message)
 }
 
-export function daytonaProvider(apiKey: string): SandboxProvider {
+export function daytonaProvider(
+  apiKey: string,
+  // A snapshot to make sandboxes from, for when the default has no desktop.
+  options: { snapshot?: string } = {}
+): SandboxProvider {
   let client: Promise<InstanceType<Sdk["Daytona"]>> | null = null
 
   // One client for the process. Only the key is passed; the SDK reads
@@ -121,7 +169,161 @@ export function daytonaProvider(apiKey: string): SandboxProvider {
     }
   }
 
+  // Waits for the desktop's processes to be up, looking now and then.
+  async function waitForDesktop(sandbox: DaytonaSandbox) {
+    const deadline = Date.now() + DESKTOP_START_WAIT_MS
+    for (;;) {
+      const status = await sandbox.computerUse.getStatus()
+      const state = desktopStateOf(status.status)
+      if (state === "running") {
+        return
+      }
+      if (state === "error" || Date.now() > deadline) {
+        throw new SandboxProviderError(
+          "The desktop didn't start. If this keeps happening, the sandbox image may not include one."
+        )
+      }
+      await new Promise((resolve) => setTimeout(resolve, DESKTOP_POLL_MS))
+    }
+  }
+
+  const desktop: DesktopProvider = {
+    async status(id) {
+      const sandbox = await get(id)
+      // A desktop only exists inside a running sandbox.
+      if (stateOf(sandbox.state) !== "running") {
+        return "stopped"
+      }
+
+      try {
+        const status = await sandbox.computerUse.getStatus()
+        return desktopStateOf(status.status)
+      } catch (error) {
+        throw toProviderError(error, "Couldn't check the desktop.")
+      }
+    },
+
+    async start(id) {
+      const sandbox = await get(id)
+      try {
+        const current = desktopStateOf(
+          (await sandbox.computerUse.getStatus()).status
+        )
+        if (current === "running") {
+          return
+        }
+        if (current !== "starting") {
+          await sandbox.computerUse.start()
+        }
+        await waitForDesktop(sandbox)
+      } catch (error) {
+        throw toProviderError(error, "Couldn't start the desktop.")
+      }
+    },
+
+    async screenshot(id) {
+      const sandbox = await get(id)
+      try {
+        // PNG, so the size can be read from the file itself.
+        const shot = await sandbox.computerUse.screenshot.takeCompressed({
+          format: "png",
+          showCursor: true,
+        })
+        const base64 = (shot.screenshot ?? "").replace(
+          /^data:image\/png;base64,/,
+          ""
+        )
+        const size = pngSize(Buffer.from(base64, "base64"))
+        if (!size) {
+          throw new SandboxProviderError(
+            "The screen image wasn't in a format the app can read."
+          )
+        }
+        return { base64, mediaType: "image/png", ...size }
+      } catch (error) {
+        throw toProviderError(error, "Couldn't take a screenshot.")
+      }
+    },
+
+    async click(id, x, y, options) {
+      const sandbox = await get(id)
+      try {
+        await sandbox.computerUse.mouse.click(
+          x,
+          y,
+          options?.button ?? "left",
+          options?.double ?? false
+        )
+      } catch (error) {
+        throw toProviderError(error, "The click didn't work.")
+      }
+    },
+
+    async move(id, x, y) {
+      const sandbox = await get(id)
+      try {
+        await sandbox.computerUse.mouse.move(x, y)
+      } catch (error) {
+        throw toProviderError(error, "Couldn't move the pointer.")
+      }
+    },
+
+    async type(id, text) {
+      const sandbox = await get(id)
+      try {
+        await sandbox.computerUse.keyboard.type(text)
+      } catch (error) {
+        throw toProviderError(error, "Couldn't type that.")
+      }
+    },
+
+    async press(id, key) {
+      const sandbox = await get(id)
+      try {
+        await sandbox.computerUse.keyboard.press(key)
+      } catch (error) {
+        throw toProviderError(
+          error,
+          "That key wasn't accepted. Try a name like Return, Escape or Tab."
+        )
+      }
+    },
+
+    async scroll(id, x, y, direction, amount) {
+      const sandbox = await get(id)
+      try {
+        await sandbox.computerUse.mouse.scroll(x, y, direction, amount)
+      } catch (error) {
+        throw toProviderError(error, "Couldn't scroll.")
+      }
+    },
+
+    async viewerUrl(id, options) {
+      const sandbox = await get(id)
+      try {
+        const signed = await sandbox.getSignedPreviewUrl(
+          VIEWER_PORT,
+          options.expiresInSeconds
+        )
+
+        // Build on the signed address rather than replacing it: wherever the
+        // signature sits (host, path or query), it is kept.
+        const url = new URL(signed.url)
+        if (!url.pathname.endsWith(VIEWER_PATH)) {
+          url.pathname = `${url.pathname.replace(/\/$/, "")}/${VIEWER_PATH}`
+        }
+        url.searchParams.set("autoconnect", "true")
+        url.searchParams.set("resize", "scale")
+        url.searchParams.set("view_only", options.viewOnly ? "true" : "false")
+        return url.toString()
+      } catch (error) {
+        throw toProviderError(error, "Couldn't open the screen.")
+      }
+    },
+  }
+
   return {
+    desktop,
     async create(input: CreateSandboxInput): Promise<CreatedSandbox> {
       try {
         const sandbox = await (
@@ -131,6 +333,8 @@ export function daytonaProvider(apiKey: string): SandboxProvider {
             labels: { [BOT_LABEL]: input.botId },
             // Switch itself off after this long without activity.
             autoStopInterval: input.autoStopMinutes,
+            // Only when one is configured; otherwise the default is used.
+            ...(options.snapshot ? { snapshot: options.snapshot } : {}),
             // Nothing else is set on purpose: no envVars, secrets or volumes.
           },
           { timeout: input.timeoutSeconds }

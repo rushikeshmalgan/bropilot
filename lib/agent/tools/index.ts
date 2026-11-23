@@ -2,6 +2,7 @@
 // behind it is configured, so the model never sees a tool that can't work.
 import type { ToolSet } from "ai"
 
+import { computerTools } from "@/lib/agent/tools/computer"
 import { memoryTools } from "@/lib/agent/tools/memory"
 import { sandboxTools } from "@/lib/agent/tools/sandbox"
 import type { ToolContext } from "@/lib/agent/tools/shared"
@@ -15,6 +16,8 @@ export type Capabilities = {
   memory: boolean
   // A Linux sandbox of its own (made the first time a tool uses it).
   sandbox: boolean
+  // A desktop screen it can look at and use (part of the sandbox).
+  computer: boolean
 }
 
 export function buildTools(context: ToolContext): {
@@ -29,11 +32,13 @@ export function buildTools(context: ToolContext): {
       ...memoryTools(context),
       ...(web ? webTools(web, context) : {}),
       ...(sandbox ? sandboxTools(context, sandbox) : {}),
+      ...(sandbox ? computerTools(context, sandbox) : {}),
     },
     capabilities: {
       web: web !== null,
       memory: true,
       sandbox: sandbox !== null,
+      computer: sandbox !== null,
     },
   }
 }

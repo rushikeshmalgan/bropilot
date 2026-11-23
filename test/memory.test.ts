@@ -83,7 +83,7 @@ describe("memory paths", () => {
 
 describe("the memory index in the system prompt", () => {
   const bot = { name: "Ada", job: "Researcher", instructions: null }
-  const caps = { web: false, memory: true, sandbox: false }
+  const caps = { web: false, memory: true, sandbox: false, computer: false }
 
   it("is capped and can't break out of its block", () => {
     const long = "x".repeat(MEMORY_INDEX_PROMPT_CHARS * 3)

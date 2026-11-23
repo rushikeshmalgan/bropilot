@@ -47,6 +47,11 @@ const STATE_TEXT: Record<
     label: "Starting",
     detail: "The sandbox is being set up or woken. This takes a few seconds.",
   },
+  deleting: {
+    label: "Being removed",
+    detail:
+      "The sandbox is being deleted. A fresh one is made the next time it is needed.",
+  },
   error: {
     label: "Needs a reset",
     detail:

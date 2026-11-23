@@ -64,7 +64,7 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
-function isPending(value: string) {
+export function isPending(value: string) {
   return value.startsWith(PENDING_PREFIX)
 }
 
@@ -85,7 +85,7 @@ function ownedBot(userId: string, botId: string) {
 }
 
 // The bot's recorded sandbox value, or undefined if the bot isn't the user's.
-async function readSandboxId(userId: string, botId: string) {
+export async function readSandboxId(userId: string, botId: string) {
   const [row] = await db
     .select({ sandboxId: bots.sandboxId })
     .from(bots)
@@ -123,7 +123,8 @@ async function ensureRunning(
   sandboxId: string
 ): Promise<"running" | "missing"> {
   const state: SandboxState = await provider.status(sandboxId)
-  if (state === "missing") {
+  // One that is on its way out is as good as gone.
+  if (state === "missing" || state === "deleting") {
     return "missing"
   }
   if (state === "error") {
@@ -288,7 +289,14 @@ export type SandboxStatus =
   | {
       configured: true
       // none: no sandbox yet; it is made the first time a bot uses one
-      state: "none" | "running" | "stopped" | "starting" | "error" | "unknown"
+      state:
+        | "none"
+        | "running"
+        | "stopped"
+        | "starting"
+        | "deleting"
+        | "error"
+        | "unknown"
     }
 
 // What the Sandbox tab shows. Never throws: if the provider can't be reached
@@ -332,9 +340,11 @@ export async function getSandboxStatus(
             ? "stopped"
             : state === "transitioning"
               ? "starting"
-              : state === "error"
-                ? "error"
-                : "none",
+              : state === "deleting"
+                ? "deleting"
+                : state === "error"
+                  ? "error"
+                  : "none",
     }
   } catch {
     return { configured: true, state: "unknown" }

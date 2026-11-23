@@ -6,7 +6,6 @@ import { useRouter } from "next/navigation"
 import {
   MonitorIcon,
   PlusIcon,
-  RefreshCwIcon,
   SlidersHorizontalIcon,
   Trash2Icon,
   UsersIcon,
@@ -37,6 +36,7 @@ import {
 import { Shimmer } from "@/components/ai-elements/shimmer"
 import { BotAvatar } from "@/components/bot-avatar"
 import { RunFollower } from "@/components/run-follower"
+import { ScreenViewer } from "@/components/screen-viewer"
 import { ToolCard } from "@/components/tool-card"
 import {
   AlertDialog,
@@ -285,6 +285,14 @@ function ChatViewInner({
   }
 
   const bot = chat.isGroup ? null : bots[0]
+  // The bot is using the screen in the reply being written: it has called the
+  // computer tool in it.
+  const usingScreen = Boolean(
+    run &&
+      messages
+        .find((message) => message.id === run.assistantMessageId)
+        ?.parts.some((part) => part.type === "tool" && part.name === "computer")
+  )
   const heading = chat.isGroup ? chat.title : (bot?.name ?? chat.title)
   // A reply with nothing in it yet is shown as "Thinking…"; one that is over
   // and still empty has nothing to show.
@@ -526,21 +534,15 @@ function ChatViewInner({
       </div>
 
       {bot && workspaceOpen && (
-        <aside className="hidden w-64 shrink-0 flex-col border-l md:flex">
-          <div className="flex h-10 shrink-0 items-center justify-end px-3">
-            <Button variant="ghost" size="icon-sm" aria-label="Refresh screen">
-              <RefreshCwIcon />
-            </Button>
-          </div>
-          <div className="flex flex-col items-center gap-3 p-3">
-            {/* The bot's screen isn't connected yet, so this is a placeholder. */}
-            <div className="flex aspect-16/10 w-full items-center justify-center rounded-md border bg-muted/50 text-muted-foreground">
-              <MonitorIcon />
-            </div>
-            <p className="text-xs text-muted-foreground">
-              {bot.name}&apos;s screen
-            </p>
-          </div>
+        <aside className="hidden w-[26rem] shrink-0 flex-col border-l md:flex xl:w-[34rem]">
+          <ScreenViewer
+            botId={bot.id}
+            botName={bot.name}
+            usingScreen={usingScreen}
+            canStop={run !== null}
+            stopping={stopping}
+            onStop={stop}
+          />
         </aside>
       )}
 

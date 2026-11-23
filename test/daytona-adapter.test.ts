@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
-import { BOT_LABEL, daytonaProvider } from "@/lib/providers/daytona"
+import { BOT_LABEL, daytonaProvider, pngSize } from "@/lib/providers/daytona"
+import { getSandboxProvider } from "@/lib/providers"
 import { SandboxProviderError } from "@/lib/providers/sandbox"
+
+import { fakePng } from "./fakes/fake-sandbox"
 
 // The Daytona SDK is replaced by a recorder, so these tests check exactly
 // what the adapter sends and how it reads what comes back. They say nothing
@@ -76,6 +79,28 @@ function sandbox(overrides: Record<string, unknown> = {}) {
       uploadFile: vi.fn(async () => {}),
       listFiles: vi.fn(async () => []),
     },
+    computerUse: {
+      getStatus: vi.fn(async () => ({ status: "active" })),
+      start: vi.fn(async () => ({})),
+      screenshot: {
+        takeCompressed: vi.fn(async () => ({ screenshot: fakePng(1280, 720) })),
+      },
+      mouse: {
+        click: vi.fn(async () => ({})),
+        move: vi.fn(async () => ({})),
+        scroll: vi.fn(async () => true),
+      },
+      keyboard: {
+        type: vi.fn(async () => {}),
+        press: vi.fn(async () => {}),
+      },
+    },
+    getSignedPreviewUrl: vi.fn(async () => ({
+      url: "https://6080-sb-1.proxy.example.invalid/",
+      token: "t",
+      port: 6080,
+      sandboxId: "sb-1",
+    })),
     ...overrides,
   }
 }
@@ -139,7 +164,7 @@ describe("the Daytona adapter", () => {
       error: "error",
       build_failed: "error",
       destroyed: "missing",
-      destroying: "missing",
+      destroying: "deleting",
     }
 
     for (const [raw, expected] of Object.entries(states)) {
@@ -333,5 +358,277 @@ describe("the Daytona adapter", () => {
       expect((error as Error).message, name).not.toContain("sk-live")
       expect((error as Error).message, name).not.toContain("daytona.io")
     }
+  })
+})
+
+describe("the Daytona adapter's desktop", () => {
+  beforeEach(() => {
+    mock.config = undefined
+    mock.creates = []
+    mock.sandboxes = new Map()
+    mock.createResult = sandbox()
+  })
+
+  afterEach(() => {
+    delete process.env.DAYTONA_API_KEY
+    delete process.env.DAYTONA_SNAPSHOT
+    vi.useRealTimers()
+  })
+
+  it("reads the picture's size from the file itself", () => {
+    expect(pngSize(Buffer.from(fakePng(1920, 1080), "base64"))).toEqual({
+      width: 1920,
+      height: 1080,
+    })
+    expect(pngSize(Buffer.from("not a png at all, just words here"))).toBeNull()
+    expect(pngSize(Buffer.alloc(10))).toBeNull()
+    expect(pngSize(Buffer.from(fakePng(0, 5), "base64"))).toBeNull()
+  })
+
+  it("reports a desktop as stopped without asking when the sandbox is off", async () => {
+    const provider = daytonaProvider("k").desktop
+    const off = sandbox({ state: "stopped" })
+    mock.sandboxes.set("sb-1", off)
+
+    expect(await provider.status("sb-1")).toBe("stopped")
+    expect(off.computerUse.getStatus).not.toHaveBeenCalled()
+  })
+
+  it("maps the desktop's status words, and treats unknown ones as an error", async () => {
+    const provider = daytonaProvider("k").desktop
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {})
+    const words: Record<string, string> = {
+      active: "running",
+      running: "running",
+      ACTIVE: "running",
+      inactive: "stopped",
+      stopped: "stopped",
+      "": "stopped",
+      partial: "starting",
+      starting: "starting",
+      "something-new": "error",
+    }
+
+    for (const [word, expected] of Object.entries(words)) {
+      mock.sandboxes.set(
+        "sb-1",
+        sandbox({
+          computerUse: { ...sandbox().computerUse, getStatus: vi.fn(async () => ({ status: word })) },
+        })
+      )
+      expect(await provider.status("sb-1"), word).toBe(expected)
+    }
+    // The unexpected word was logged so it can be reported.
+    expect(logged).toHaveBeenCalledWith(expect.stringContaining("something-new"))
+    logged.mockRestore()
+  })
+
+  it("starts the desktop and waits for it to come up", async () => {
+    const sandboxes = daytonaProvider("k")
+    const provider = sandboxes.desktop
+    const answers = ["inactive", "partial", "partial", "active"]
+    const box = sandbox({
+      computerUse: {
+        ...sandbox().computerUse,
+        getStatus: vi.fn(async () => ({ status: answers.shift() ?? "active" })),
+      },
+    })
+    mock.sandboxes.set("sb-1", box)
+    // Load the SDK before the clock is faked: the module load can't run on it.
+    await sandboxes.status("sb-1")
+    answers.length = 0
+    answers.push("inactive", "partial", "partial", "active")
+
+    vi.useFakeTimers()
+    const started = provider.start("sb-1")
+    await vi.advanceTimersByTimeAsync(10_000)
+    await started
+
+    expect(box.computerUse.start).toHaveBeenCalledOnce()
+  })
+
+  it("doesn't start a desktop that is already up or on its way", async () => {
+    const provider = daytonaProvider("k").desktop
+
+    const up = sandbox()
+    mock.sandboxes.set("a", up)
+    await provider.start("a")
+    expect(up.computerUse.start).not.toHaveBeenCalled()
+
+    const answers = ["starting", "active"]
+    const coming = sandbox({
+      computerUse: {
+        ...sandbox().computerUse,
+        getStatus: vi.fn(async () => ({ status: answers.shift() ?? "active" })),
+      },
+    })
+    mock.sandboxes.set("b", coming)
+    vi.useFakeTimers()
+    const waiting = provider.start("b")
+    await vi.advanceTimersByTimeAsync(5_000)
+    await waiting
+    expect(coming.computerUse.start).not.toHaveBeenCalled()
+  })
+
+  it("gives up with a clear message if the desktop never comes up or fails", async () => {
+    const provider = daytonaProvider("k").desktop
+    const never = sandbox({
+      computerUse: {
+        ...sandbox().computerUse,
+        getStatus: vi.fn(async () => ({ status: "inactive" })),
+      },
+    })
+    mock.sandboxes.set("a", never)
+    await provider.status("a")
+
+    vi.useFakeTimers()
+    const result = provider.start("a").catch((error: unknown) => error)
+    await vi.advanceTimersByTimeAsync(60_000)
+    const error = await result
+    expect(error).toBeInstanceOf(SandboxProviderError)
+    expect((error as Error).message).toContain("didn't start")
+    vi.useRealTimers()
+
+    mock.sandboxes.set(
+      "b",
+      sandbox({
+        computerUse: {
+          ...sandbox().computerUse,
+          getStatus: vi.fn(async () => {
+            throw new DaytonaError("DaytonaInternalServerError", "x https://api/internal key=abc", 500)
+          }),
+        },
+      })
+    )
+    const failed = await provider.start("b").catch((caught: unknown) => caught)
+    expect(failed).toBeInstanceOf(SandboxProviderError)
+    expect((failed as Error).message).not.toContain("internal")
+  })
+
+  it("takes a PNG screenshot and says how big it is", async () => {
+    const provider = daytonaProvider("k").desktop
+    const box = sandbox()
+    mock.sandboxes.set("sb-1", box)
+
+    const shot = await provider.screenshot("sb-1")
+
+    expect(shot).toEqual({
+      base64: fakePng(1280, 720),
+      mediaType: "image/png",
+      width: 1280,
+      height: 720,
+    })
+    expect(box.computerUse.screenshot.takeCompressed).toHaveBeenCalledWith({
+      format: "png",
+      showCursor: true,
+    })
+
+    // A data: prefix is removed, and something that isn't a PNG is refused.
+    box.computerUse.screenshot.takeCompressed.mockResolvedValueOnce({
+      screenshot: `data:image/png;base64,${fakePng(800, 600)}`,
+    })
+    expect(await provider.screenshot("sb-1")).toMatchObject({ width: 800, height: 600 })
+    box.computerUse.screenshot.takeCompressed.mockResolvedValueOnce({
+      screenshot: Buffer.from("this is a jpeg, honestly").toString("base64"),
+    })
+    await expect(provider.screenshot("sb-1")).rejects.toThrow(/format the app can read/)
+  })
+
+  it("passes clicks, keys, typing and scrolling through as asked", async () => {
+    const provider = daytonaProvider("k").desktop
+    const box = sandbox()
+    mock.sandboxes.set("sb-1", box)
+
+    await provider.click("sb-1", 10, 20)
+    await provider.click("sb-1", 1, 2, { button: "right", double: true })
+    await provider.move("sb-1", 3, 4)
+    await provider.type("sb-1", "hello")
+    await provider.press("sb-1", "Return")
+    await provider.scroll("sb-1", 5, 6, "down", 3)
+
+    expect(box.computerUse.mouse.click.mock.calls).toEqual([
+      [10, 20, "left", false],
+      [1, 2, "right", true],
+    ])
+    expect(box.computerUse.mouse.move).toHaveBeenCalledWith(3, 4)
+    expect(box.computerUse.keyboard.type).toHaveBeenCalledWith("hello")
+    expect(box.computerUse.keyboard.press).toHaveBeenCalledWith("Return")
+    expect(box.computerUse.mouse.scroll).toHaveBeenCalledWith(5, 6, "down", 3)
+
+    box.computerUse.keyboard.press.mockRejectedValueOnce(
+      new DaytonaError("DaytonaBadRequestError", "xdotool: unknown key at /usr/bin/x", 400)
+    )
+    await expect(provider.press("sb-1", "Bogus")).rejects.toThrow(/Try a name like Return/)
+  })
+
+  it("builds the viewer address on the signed one, whatever shape that has", async () => {
+    const provider = daytonaProvider("k").desktop
+    const shapes: [string, (url: URL) => void][] = [
+      // The signature is in the host name.
+      [
+        "https://6080-sb-1.proxy.example.invalid/",
+        (url) => {
+          expect(url.host).toBe("6080-sb-1.proxy.example.invalid")
+          expect(url.pathname).toBe("/vnc.html")
+        },
+      ],
+      // The signature is in the path.
+      [
+        "https://proxy.example.invalid/s/SIGNED-TOKEN",
+        (url) => expect(url.pathname).toBe("/s/SIGNED-TOKEN/vnc.html"),
+      ],
+      // The signature is in the query.
+      [
+        "https://proxy.example.invalid/?token=SIGNED-TOKEN",
+        (url) => {
+          expect(url.pathname).toBe("/vnc.html")
+          expect(url.searchParams.get("token")).toBe("SIGNED-TOKEN")
+        },
+      ],
+      // It already points at the viewer page.
+      [
+        "https://proxy.example.invalid/vnc.html?token=T",
+        (url) => {
+          expect(url.pathname).toBe("/vnc.html")
+          expect(url.searchParams.get("token")).toBe("T")
+        },
+      ],
+    ]
+
+    for (const [signed, check] of shapes) {
+      const box = sandbox({
+        getSignedPreviewUrl: vi.fn(async () => ({ url: signed, token: "t", port: 6080, sandboxId: "sb-1" })),
+      })
+      mock.sandboxes.set("sb-1", box)
+
+      const viewing = new URL(await provider.viewerUrl("sb-1", { expiresInSeconds: 300, viewOnly: true }))
+      const controlling = new URL(await provider.viewerUrl("sb-1", { expiresInSeconds: 300, viewOnly: false }))
+
+      check(viewing)
+      expect(viewing.searchParams.get("view_only")).toBe("true")
+      expect(controlling.searchParams.get("view_only")).toBe("false")
+      expect(viewing.searchParams.get("autoconnect")).toBe("true")
+      expect(viewing.searchParams.get("resize")).toBe("scale")
+      // The viewer's port and the requested lifetime were passed on.
+      expect(box.getSignedPreviewUrl).toHaveBeenCalledWith(6080, 300)
+    }
+  })
+
+  it("uses a named snapshot only when one is configured and well formed", async () => {
+    mock.createResult = sandbox()
+    process.env.DAYTONA_API_KEY = "test-key"
+
+    const plain = getSandboxProvider()!
+    await plain.create({ botId: "b", autoStopMinutes: 1, timeoutSeconds: 5 })
+    expect(mock.creates[0].params).not.toHaveProperty("snapshot")
+
+    process.env.DAYTONA_SNAPSHOT = "my-desktop-snapshot"
+    await getSandboxProvider()!.create({ botId: "b", autoStopMinutes: 1, timeoutSeconds: 5 })
+    expect(mock.creates[1].params).toMatchObject({ snapshot: "my-desktop-snapshot" })
+
+    // Anything that isn't a plain name is ignored, not passed on.
+    process.env.DAYTONA_SNAPSHOT = "bad name; rm -rf /"
+    await getSandboxProvider()!.create({ botId: "b", autoStopMinutes: 1, timeoutSeconds: 5 })
+    expect(mock.creates[2].params).not.toHaveProperty("snapshot")
   })
 })

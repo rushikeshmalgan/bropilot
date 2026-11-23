@@ -5,37 +5,52 @@ import { RATE_LIMIT_MAX_MESSAGES, RATE_LIMIT_WINDOW_MS } from "@/lib/ai"
 // this to a shared store (Redis, Postgres) if that starts to matter.
 const hits = new Map<string, number[]>()
 
-export function checkRateLimit(
-  userId: string,
-  now = Date.now()
-): { ok: true } | { ok: false; retryAfterSeconds: number } {
-  const recent = (hits.get(userId) ?? []).filter(
-    (time) => now - time < RATE_LIMIT_WINDOW_MS
-  )
+export type LimitResult = { ok: true } | { ok: false; retryAfterSeconds: number }
 
-  if (recent.length >= RATE_LIMIT_MAX_MESSAGES) {
-    hits.set(userId, recent)
+// Counts one hit for `key` and says whether it is within `max` hits per
+// `windowMs`. `scope` keeps different limits (messages, screen addresses) from
+// sharing a count.
+export function checkLimit(
+  scope: string,
+  key: string,
+  max: number,
+  windowMs: number,
+  now = Date.now()
+): LimitResult {
+  const id = `${scope}:${key}`
+  const recent = (hits.get(id) ?? []).filter((time) => now - time < windowMs)
+
+  if (recent.length >= max) {
+    hits.set(id, recent)
     const oldest = recent[0]
     return {
       ok: false,
-      retryAfterSeconds: Math.max(
-        1,
-        Math.ceil((oldest + RATE_LIMIT_WINDOW_MS - now) / 1000)
-      ),
+      retryAfterSeconds: Math.max(1, Math.ceil((oldest + windowMs - now) / 1000)),
     }
   }
 
   recent.push(now)
-  hits.set(userId, recent)
+  hits.set(id, recent)
 
-  // Forget users who have gone quiet so the map doesn't grow forever.
+  // Forget keys that have gone quiet so the map doesn't grow forever.
   if (hits.size > 1000) {
-    for (const [id, times] of hits) {
-      if (times.every((time) => now - time >= RATE_LIMIT_WINDOW_MS)) {
-        hits.delete(id)
+    for (const [name, times] of hits) {
+      if (times.every((time) => now - time >= windowMs)) {
+        hits.delete(name)
       }
     }
   }
 
   return { ok: true }
+}
+
+// Messages a user may send.
+export function checkRateLimit(userId: string, now = Date.now()): LimitResult {
+  return checkLimit(
+    "messages",
+    userId,
+    RATE_LIMIT_MAX_MESSAGES,
+    RATE_LIMIT_WINDOW_MS,
+    now
+  )
 }

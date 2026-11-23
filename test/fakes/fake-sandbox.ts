@@ -1,6 +1,8 @@
 import {
   SandboxProviderError,
   type CreateSandboxInput,
+  type DesktopProvider,
+  type DesktopState,
   type ExecOptions,
   type SandboxProvider,
   type SandboxState,
@@ -12,6 +14,25 @@ type FakeBox = {
   state: SandboxState
   files: Map<string, Buffer>
   startCount: number
+  desktop: DesktopState
+}
+
+// The smallest PNG the app will accept: signature plus a header chunk that
+// says how big the picture is. Nothing reads the pixels.
+export function fakePng(width: number, height: number) {
+  const bytes = Buffer.alloc(33)
+  Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(bytes)
+  bytes.writeUInt32BE(13, 8)
+  bytes.write("IHDR", 12, "ascii")
+  bytes.writeUInt32BE(width, 16)
+  bytes.writeUInt32BE(height, 20)
+  return bytes.toString("base64")
+}
+
+// One thing the bot (or a test) did to the screen.
+export type DesktopAction = {
+  type: "click" | "move" | "type" | "press" | "scroll" | "screenshot"
+  args: unknown[]
 }
 
 type Options = {
@@ -23,6 +44,14 @@ type Options = {
   rootUser?: boolean
   // delete() fails for these IDs, like the service being down.
   failDeleteFor?: (id: string) => boolean
+  // How long starting the desktop takes.
+  desktopStartDelayMs?: number
+  // Starting the desktop fails, like an image with no desktop in it.
+  desktopCannotStart?: boolean
+  // How long each click, key press and so on takes.
+  desktopActionDelayMs?: number
+  // The size of the fake screen.
+  screen?: { width: number; height: number }
 }
 
 // An in-memory stand-in for Daytona. exec() understands just enough shell for
@@ -35,7 +64,11 @@ export function fakeSandbox(options: Options = {}) {
     deleted: [] as string[],
     commands: [] as { id: string; command: string; options: ExecOptions }[],
     started: [] as string[],
+    desktopStarts: [] as string[],
+    desktopActions: [] as DesktopAction[],
+    viewerUrls: [] as { id: string; expiresInSeconds: number; viewOnly: boolean }[],
   }
+  const screen = options.screen ?? { width: 1280, height: 720 }
   let failCreates = options.failCreates ?? 0
   let counter = 0
   // Settings a test may change while it runs.
@@ -49,7 +82,87 @@ export function fakeSandbox(options: Options = {}) {
     return box
   }
 
+  const act = async (type: DesktopAction["type"], ...args: unknown[]) => {
+    log.desktopActions.push({ type, args })
+    if (options.desktopActionDelayMs) {
+      await new Promise((resolve) => setTimeout(resolve, options.desktopActionDelayMs))
+    }
+  }
+
+  const needRunningDesktop = (id: string) => {
+    const box = need(id)
+    if (box.state !== "running" || box.desktop !== "running") {
+      throw new SandboxProviderError("The desktop isn't running.")
+    }
+  }
+
+  const desktop: DesktopProvider = {
+    async status(id) {
+      const box = need(id)
+      return box.state === "running" ? box.desktop : "stopped"
+    },
+
+    async start(id) {
+      const box = need(id)
+      if (options.desktopStartDelayMs) {
+        await new Promise((resolve) => setTimeout(resolve, options.desktopStartDelayMs))
+      }
+      if (options.desktopCannotStart) {
+        box.desktop = "error"
+        throw new SandboxProviderError("The desktop didn't start.")
+      }
+      box.desktop = "running"
+      log.desktopStarts.push(id)
+    },
+
+    async screenshot(id) {
+      needRunningDesktop(id)
+      await act("screenshot")
+      return {
+        base64: fakePng(screen.width, screen.height),
+        mediaType: "image/png",
+        ...screen,
+      }
+    },
+
+    async click(id, x, y, clickOptions) {
+      needRunningDesktop(id)
+      await act("click", x, y, clickOptions)
+    },
+
+    async move(id, x, y) {
+      needRunningDesktop(id)
+      await act("move", x, y)
+    },
+
+    async type(id, text) {
+      needRunningDesktop(id)
+      await act("type", text)
+    },
+
+    async press(id, key) {
+      needRunningDesktop(id)
+      if (key === "NotAKey") {
+        throw new SandboxProviderError("That key wasn't accepted.")
+      }
+      await act("press", key)
+    },
+
+    async scroll(id, x, y, direction, amount) {
+      needRunningDesktop(id)
+      await act("scroll", x, y, direction, amount)
+    },
+
+    async viewerUrl(id, urlOptions) {
+      need(id)
+      log.viewerUrls.push({ id, ...urlOptions })
+      // Deliberately carries no sandbox ID: a fresh token each time.
+      return `https://viewer.example.invalid/vnc.html?t=${Math.random().toString(36).slice(2)}&view_only=${urlOptions.viewOnly}`
+    },
+  }
+
   const provider: SandboxProvider = {
+    desktop,
     async create(input) {
       if (options.createDelayMs) {
         await new Promise((resolve) => setTimeout(resolve, options.createDelayMs))
@@ -67,6 +180,7 @@ export function fakeSandbox(options: Options = {}) {
         state: "running",
         files: new Map(),
         startCount: 0,
+        desktop: "stopped",
       })
       return { id }
     },
@@ -208,6 +322,15 @@ export function fakeSandbox(options: Options = {}) {
     breakIt: (id: string) => {
       need(id).state = "error"
     },
+    // The sandbox is in the middle of being deleted.
+    markDeleting: (id: string) => {
+      need(id).state = "deleting"
+    },
+    // The desktop's processes died while the sandbox stayed up.
+    breakDesktop: (id: string) => {
+      need(id).desktop = "error"
+    },
+    desktopIs: (id: string) => need(id).desktop,
     vanish: (id: string) => {
       boxes.delete(id)
     },
@@ -220,6 +343,7 @@ export function fakeSandbox(options: Options = {}) {
         state: "running",
         files: new Map(),
         startCount: 0,
+        desktop: "stopped",
       })
       return id
     },
