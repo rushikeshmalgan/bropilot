@@ -84,7 +84,7 @@ describe("sandboxes", () => {
       const bot = await freshBot()
       expect(await recordedSandbox(bot.id)).toBeNull()
 
-      const first = await getOrCreateSandbox(owner, bot.id, { provider: fake })
+      const first = await getOrCreateSandbox(owner, bot.id, { plan: "pro", provider: fake })
       expect(first.ok).toBe(true)
       if (!first.ok) return
 
@@ -99,7 +99,7 @@ describe("sandboxes", () => {
       // It asked the sandbox who it runs as, rather than trusting a default.
       expect(fake.log.commands.map((c) => c.command)).toEqual(["id -u"])
 
-      const second = await getOrCreateSandbox(owner, bot.id, { provider: fake })
+      const second = await getOrCreateSandbox(owner, bot.id, { plan: "pro", provider: fake })
       expect(second).toEqual({ ok: true, sandboxId: first.sandboxId })
       expect(fake.log.created).toHaveLength(1)
     })
@@ -110,7 +110,7 @@ describe("sandboxes", () => {
 
       const results = await Promise.all(
         Array.from({ length: 8 }, () =>
-          getOrCreateSandbox(owner, bot.id, { provider: fake, pollMs: 50 })
+          getOrCreateSandbox(owner, bot.id, { plan: "pro", provider: fake, pollMs: 50 })
         )
       )
 
@@ -126,11 +126,11 @@ describe("sandboxes", () => {
       const fake = fakeSandbox({ failCreates: 1 })
       const bot = await freshBot()
 
-      const failed = await getOrCreateSandbox(owner, bot.id, { provider: fake })
+      const failed = await getOrCreateSandbox(owner, bot.id, { plan: "pro", provider: fake })
       expect(failed).toMatchObject({ ok: false, code: "failed" })
       expect(await recordedSandbox(bot.id)).toBeNull()
 
-      const again = await getOrCreateSandbox(owner, bot.id, { provider: fake })
+      const again = await getOrCreateSandbox(owner, bot.id, { plan: "pro", provider: fake })
       expect(again.ok).toBe(true)
       expect(fake.liveFor(bot.id)).toBe(1)
     })
@@ -139,7 +139,7 @@ describe("sandboxes", () => {
       const fake = fakeSandbox({ rootUser: true })
       const bot = await freshBot()
 
-      const result = await getOrCreateSandbox(owner, bot.id, { provider: fake })
+      const result = await getOrCreateSandbox(owner, bot.id, { plan: "pro", provider: fake })
 
       expect(result).toMatchObject({ ok: false, code: "failed" })
       expect(fake.liveFor(bot.id)).toBe(0)
@@ -154,7 +154,7 @@ describe("sandboxes", () => {
       await setRecordedSandbox(bot.id, `pending:${tenMinutesAgo}:dead0001`)
       const orphan = fake.plantOrphan(bot.id)
 
-      const result = await getOrCreateSandbox(owner, bot.id, { provider: fake })
+      const result = await getOrCreateSandbox(owner, bot.id, { plan: "pro", provider: fake })
 
       expect(result.ok).toBe(true)
       expect(fake.log.deleted).toContain(orphan)
@@ -172,6 +172,7 @@ describe("sandboxes", () => {
       await setRecordedSandbox(bot.id, claim)
 
       const result = await getOrCreateSandbox(owner, bot.id, {
+        plan: "pro",
         provider: fake,
         waitMs: 400,
         pollMs: 50,
@@ -189,6 +190,7 @@ describe("sandboxes", () => {
       await setRecordedSandbox(bot.id, `pending:${Date.now()}:live0002`)
 
       const waiting = getOrCreateSandbox(owner, bot.id, {
+        plan: "pro",
         provider: fake,
         waitMs: 10_000,
         pollMs: 50,
@@ -209,13 +211,13 @@ describe("sandboxes", () => {
     it("starts a sandbox that switched itself off", async () => {
       const fake = fakeSandbox()
       const bot = await freshBot()
-      const first = await getOrCreateSandbox(owner, bot.id, { provider: fake })
+      const first = await getOrCreateSandbox(owner, bot.id, { plan: "pro", provider: fake })
       if (!first.ok) throw new Error(`setup failed: ${JSON.stringify(first)}`)
 
       fake.switchOff(first.sandboxId)
       expect(await fake.status(first.sandboxId)).toBe("stopped")
 
-      const again = await getOrCreateSandbox(owner, bot.id, { provider: fake })
+      const again = await getOrCreateSandbox(owner, bot.id, { plan: "pro", provider: fake })
 
       expect(again).toEqual({ ok: true, sandboxId: first.sandboxId })
       expect(fake.log.started).toEqual([first.sandboxId])
@@ -226,11 +228,11 @@ describe("sandboxes", () => {
     it("makes a new sandbox if the old one was deleted at the provider", async () => {
       const fake = fakeSandbox()
       const bot = await freshBot()
-      const first = await getOrCreateSandbox(owner, bot.id, { provider: fake })
+      const first = await getOrCreateSandbox(owner, bot.id, { plan: "pro", provider: fake })
       if (!first.ok) throw new Error(`setup failed: ${JSON.stringify(first)}`)
 
       fake.vanish(first.sandboxId)
-      const second = await getOrCreateSandbox(owner, bot.id, { provider: fake })
+      const second = await getOrCreateSandbox(owner, bot.id, { plan: "pro", provider: fake })
 
       expect(second.ok).toBe(true)
       if (!second.ok) return
@@ -242,11 +244,11 @@ describe("sandboxes", () => {
     it("doesn't silently replace a sandbox that is in an error state", async () => {
       const fake = fakeSandbox()
       const bot = await freshBot()
-      const first = await getOrCreateSandbox(owner, bot.id, { provider: fake })
+      const first = await getOrCreateSandbox(owner, bot.id, { plan: "pro", provider: fake })
       if (!first.ok) throw new Error(`setup failed: ${JSON.stringify(first)}`)
 
       fake.breakIt(first.sandboxId)
-      const result = await getOrCreateSandbox(owner, bot.id, { provider: fake })
+      const result = await getOrCreateSandbox(owner, bot.id, { plan: "pro", provider: fake })
 
       expect(result).toMatchObject({ ok: false, code: "failed" })
       expect(result.ok ? "" : result.error).toContain("error state")
@@ -258,17 +260,17 @@ describe("sandboxes", () => {
       const fake = fakeSandbox()
 
       expect(
-        await getOrCreateSandbox(owner, strangerBot.id, { provider: fake })
+        await getOrCreateSandbox(owner, strangerBot.id, { plan: "pro", provider: fake })
       ).toMatchObject({ ok: false, code: "not_found" })
       expect(
-        await getOrCreateSandbox(owner, "no-such-bot", { provider: fake })
+        await getOrCreateSandbox(owner, "no-such-bot", { plan: "pro", provider: fake })
       ).toMatchObject({ ok: false, code: "not_found" })
       expect(fake.log.created).toHaveLength(0)
       expect(await recordedSandbox(strangerBot.id)).toBeNull()
 
       const bot = await freshBot()
       expect(
-        await getOrCreateSandbox(owner, bot.id, { provider: null })
+        await getOrCreateSandbox(owner, bot.id, { plan: "pro", provider: null })
       ).toMatchObject({ ok: false, code: "not_configured" })
     })
   })
@@ -277,7 +279,7 @@ describe("sandboxes", () => {
     const context = (bot: Bot, userId = owner) => ({
       userId,
       botId: bot.id,
-      runId: "r",
+      runId: "r", plan: "pro" as const,
     })
 
     it("run a command, and a failing command is data, not an error", async () => {
@@ -419,7 +421,7 @@ describe("sandboxes", () => {
       ).toEqual({ error: expect.stringContaining("limit") })
       expect(fake.log.created).toHaveLength(0)
 
-      const made = await getOrCreateSandbox(owner, bot.id, { provider: fake })
+      const made = await getOrCreateSandbox(owner, bot.id, { plan: "pro", provider: fake })
       if (!made.ok) throw new Error(`setup failed: ${JSON.stringify(made)}`)
       fake.boxes.get(made.sandboxId)!.files.set("bin.dat", Buffer.from([1, 2, 0, 3]))
       fake.boxes
@@ -459,7 +461,7 @@ describe("sandboxes", () => {
       const mine = await freshBot()
       // A run for a bot its user doesn't own can't get a sandbox.
       const { bash } = sandboxTools(
-        { userId: owner, botId: strangerBot.id, runId: "r" },
+        { userId: owner, botId: strangerBot.id, runId: "r", plan: "pro" as const },
         fake
       )
 
@@ -475,7 +477,7 @@ describe("sandboxes", () => {
     it("deletes the sandbox and forgets it, and the next use starts empty", async () => {
       const fake = fakeSandbox()
       const bot = await freshBot()
-      const { writeFile } = sandboxTools({ userId: owner, botId: bot.id, runId: "r" }, fake)
+      const { writeFile } = sandboxTools({ userId: owner, botId: bot.id, runId: "r", plan: "pro" as const }, fake)
       await call(writeFile, { path: "keep.txt", content: "precious" })
       const first = await recordedSandbox(bot.id)
 
@@ -484,7 +486,7 @@ describe("sandboxes", () => {
       expect(fake.log.deleted).toEqual([first])
       expect(await recordedSandbox(bot.id)).toBeNull()
 
-      const second = await getOrCreateSandbox(owner, bot.id, { provider: fake })
+      const second = await getOrCreateSandbox(owner, bot.id, { plan: "pro", provider: fake })
       expect(second.ok && second.sandboxId).not.toBe(first)
       expect(fake.boxes.get(second.ok ? second.sandboxId : "")?.files.size).toBe(0)
     })
@@ -496,7 +498,7 @@ describe("sandboxes", () => {
       expect(await resetSandbox(owner, bot.id, { provider: fake })).toEqual({ ok: true })
       expect(fake.log.deleted).toHaveLength(0)
 
-      const made = await getOrCreateSandbox(stranger, strangerBot.id, { provider: fake })
+      const made = await getOrCreateSandbox(stranger, strangerBot.id, { plan: "pro", provider: fake })
       if (!made.ok) throw new Error(`setup failed: ${JSON.stringify(made)}`)
       expect(await resetSandbox(owner, strangerBot.id, { provider: fake })).toMatchObject({
         ok: false,
@@ -510,7 +512,7 @@ describe("sandboxes", () => {
     it("keeps the record when the sandbox couldn't be deleted", async () => {
       const fake = fakeSandbox({ failDeleteFor: () => true })
       const bot = await freshBot()
-      const made = await getOrCreateSandbox(owner, bot.id, { provider: fake })
+      const made = await getOrCreateSandbox(owner, bot.id, { plan: "pro", provider: fake })
       if (!made.ok) throw new Error(`setup failed: ${JSON.stringify(made)}`)
 
       const result = await resetSandbox(owner, bot.id, { provider: fake })
@@ -522,7 +524,7 @@ describe("sandboxes", () => {
     it("works when the sandbox is already gone at the provider", async () => {
       const fake = fakeSandbox()
       const bot = await freshBot()
-      const made = await getOrCreateSandbox(owner, bot.id, { provider: fake })
+      const made = await getOrCreateSandbox(owner, bot.id, { plan: "pro", provider: fake })
       if (!made.ok) throw new Error(`setup failed: ${JSON.stringify(made)}`)
       fake.vanish(made.sandboxId)
 
@@ -553,7 +555,7 @@ describe("sandboxes", () => {
       const fake = fakeSandbox()
       overrideProviders({ sandbox: fake })
       const bot = await freshBot()
-      const made = await getOrCreateSandbox(owner, bot.id, { provider: fake })
+      const made = await getOrCreateSandbox(owner, bot.id, { plan: "pro", provider: fake })
       if (!made.ok) throw new Error(`setup failed: ${JSON.stringify(made)}`)
 
       expect(await resetSandboxAction(bot.id)).toEqual({
@@ -585,7 +587,7 @@ describe("sandboxes", () => {
         state: "none",
       })
 
-      const made = await getOrCreateSandbox(owner, bot.id, { provider: fake })
+      const made = await getOrCreateSandbox(owner, bot.id, { plan: "pro", provider: fake })
       if (!made.ok) throw new Error(`setup failed: ${JSON.stringify(made)}`)
       const state = async () =>
         (await getSandboxStatus(owner, bot.id, { provider: fake }))!
@@ -619,7 +621,7 @@ describe("sandboxes", () => {
     it("deletes its sandbox, chats and memory with it", async () => {
       const fake = fakeSandbox()
       const bot = await freshBot()
-      const made = await getOrCreateSandbox(owner, bot.id, { provider: fake })
+      const made = await getOrCreateSandbox(owner, bot.id, { plan: "pro", provider: fake })
       if (!made.ok) throw new Error(`setup failed: ${JSON.stringify(made)}`)
       const chatId = await newChat(owner, bot.id)
       await writeMemory(owner, bot.id, {
@@ -641,7 +643,7 @@ describe("sandboxes", () => {
     it("keeps the bot if its sandbox can't be removed", async () => {
       const fake = fakeSandbox({ failDeleteFor: () => true })
       const bot = await freshBot()
-      const made = await getOrCreateSandbox(owner, bot.id, { provider: fake })
+      const made = await getOrCreateSandbox(owner, bot.id, { plan: "pro", provider: fake })
       if (!made.ok) throw new Error(`setup failed: ${JSON.stringify(made)}`)
 
       const result = await removeBot(owner, bot.id, { provider: fake })
@@ -668,7 +670,7 @@ describe("sandboxes", () => {
 
     it("refuses someone else's bot and touches nothing", async () => {
       const fake = fakeSandbox()
-      const made = await getOrCreateSandbox(stranger, strangerBot.id, { provider: fake })
+      const made = await getOrCreateSandbox(stranger, strangerBot.id, { plan: "pro", provider: fake })
       if (!made.ok) throw new Error(`setup failed: ${JSON.stringify(made)}`)
 
       expect(await removeBot(owner, strangerBot.id, { provider: fake })).toMatchObject({

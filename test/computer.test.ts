@@ -61,7 +61,7 @@ describe("computer use", () => {
     { desktop = false, userId = owner } = {}
   ) {
     const bot = await freshBot(userId)
-    const made = await getOrCreateSandbox(userId, bot.id, { provider: fake })
+    const made = await getOrCreateSandbox(userId, bot.id, { plan: "pro", provider: fake })
     if (!made.ok) throw new Error(`setup failed: ${JSON.stringify(made)}`)
     if (desktop) await fake.desktop.start(made.sandboxId)
     return { bot, sandboxId: made.sandboxId }
@@ -76,15 +76,15 @@ describe("computer use", () => {
         ...(reason ? { reason } : {}),
       })
       const stateOf = async (bot: Bot) =>
-        getDesktopStatus(owner, bot.id, { provider: fake })
+        getDesktopStatus(owner, bot.id, { plan: "pro", provider: fake })
 
       // Not configured, and someone else's bot.
       const lonely = await freshBot()
-      expect(await getDesktopStatus(owner, lonely.id, { provider: null })).toEqual({
+      expect(await getDesktopStatus(owner, lonely.id, { plan: "pro", provider: null })).toEqual({
         configured: false,
       })
       const theirs = await freshBot(stranger)
-      expect(await getDesktopStatus(owner, theirs.id, { provider: fake })).toBeNull()
+      expect(await getDesktopStatus(owner, theirs.id, { plan: "pro", provider: fake })).toBeNull()
 
       // No sandbox: stopped, and nothing is made by looking.
       expect(await stateOf(lonely)).toEqual(configured("stopped", "no_sandbox"))
@@ -119,7 +119,7 @@ describe("computer use", () => {
         .update((await import("@/lib/db/schema")).bots)
         .set({ sandboxId: `pending:${Date.now()}:abc12345` })
         .where(eq((await import("@/lib/db/schema")).bots.id, bot.id))
-      expect(await getDesktopStatus(owner, bot.id, { provider: fake })).toEqual({
+      expect(await getDesktopStatus(owner, bot.id, { plan: "pro", provider: fake })).toEqual({
         configured: true,
         state: "starting",
       })
@@ -133,7 +133,7 @@ describe("computer use", () => {
           throw new Error("network down")
         },
       }) as typeof fake
-      expect(await getDesktopStatus(owner, bot.id, { provider: down })).toEqual({
+      expect(await getDesktopStatus(owner, bot.id, { plan: "pro", provider: down })).toEqual({
         configured: true,
         state: "error",
         reason: "unreachable",
@@ -145,7 +145,7 @@ describe("computer use", () => {
       const { bot, sandboxId } = await botWithSandbox(fake)
       fake.markDeleting(sandboxId)
 
-      const again = await getOrCreateSandbox(owner, bot.id, { provider: fake })
+      const again = await getOrCreateSandbox(owner, bot.id, { plan: "pro", provider: fake })
 
       expect(again.ok && again.sandboxId).not.toBe(sandboxId)
       expect(fake.log.created).toHaveLength(2)
@@ -157,12 +157,12 @@ describe("computer use", () => {
       const fake = fakeSandbox()
       const { bot, sandboxId } = await botWithSandbox(fake, { desktop: true })
 
-      const viewing = await connectDesktop(owner, bot.id, {}, { provider: fake })
+      const viewing = await connectDesktop(owner, bot.id, {}, { plan: "pro", provider: fake })
       const controlling = await connectDesktop(
         owner,
         bot.id,
         { control: true },
-        { provider: fake }
+        { plan: "pro", provider: fake }
       )
 
       expect(viewing?.url).toMatch(/^https:\/\/viewer\.example\.invalid\//)
@@ -179,7 +179,7 @@ describe("computer use", () => {
       const fake = fakeSandbox()
       const { bot } = await botWithSandbox(fake)
 
-      const result = await connectDesktop(owner, bot.id, {}, { provider: fake })
+      const result = await connectDesktop(owner, bot.id, {}, { plan: "pro", provider: fake })
 
       expect(result).toEqual({ status: { configured: true, state: "stopped" } })
       expect(fake.log.viewerUrls).toHaveLength(0)
@@ -190,7 +190,7 @@ describe("computer use", () => {
       const { bot, sandboxId } = await botWithSandbox(fake)
       fake.switchOff(sandboxId)
 
-      const woken = await connectDesktop(owner, bot.id, { start: true }, { provider: fake })
+      const woken = await connectDesktop(owner, bot.id, { start: true }, { plan: "pro", provider: fake })
 
       expect(woken?.status).toEqual({ configured: true, state: "live" })
       expect(woken?.url).toBeTruthy()
@@ -200,7 +200,7 @@ describe("computer use", () => {
       // A bot with no sandbox: asking to start still makes nothing.
       const none = await freshBot()
       const before = fake.log.created.length
-      const result = await connectDesktop(owner, none.id, { start: true }, { provider: fake })
+      const result = await connectDesktop(owner, none.id, { start: true }, { plan: "pro", provider: fake })
       expect(result?.status).toEqual({ configured: true, state: "stopped", reason: "no_sandbox" })
       expect(fake.log.created).toHaveLength(before)
     })
@@ -209,7 +209,7 @@ describe("computer use", () => {
       const cannot = fakeSandbox({ desktopCannotStart: true })
       const { bot } = await botWithSandbox(cannot)
       expect(
-        (await connectDesktop(owner, bot.id, { start: true }, { provider: cannot }))?.status
+        (await connectDesktop(owner, bot.id, { start: true }, { plan: "pro", provider: cannot }))?.status
       ).toEqual({ configured: true, state: "error", reason: "failed" })
 
       const fake = fakeSandbox()
@@ -222,7 +222,7 @@ describe("computer use", () => {
           },
         },
       }) as typeof fake
-      const result = await connectDesktop(owner, live.bot.id, {}, { provider: noUrl })
+      const result = await connectDesktop(owner, live.bot.id, {}, { plan: "pro", provider: noUrl })
       expect(result).toEqual({
         status: { configured: true, state: "error", reason: "failed" },
       })
@@ -232,7 +232,7 @@ describe("computer use", () => {
       const fake = fakeSandbox()
       const { bot } = await botWithSandbox(fake, { desktop: true, userId: stranger })
 
-      expect(await connectDesktop(owner, bot.id, {}, { provider: fake })).toBeNull()
+      expect(await connectDesktop(owner, bot.id, {}, { plan: "pro", provider: fake })).toBeNull()
       expect(fake.log.viewerUrls).toHaveLength(0)
     })
   })
@@ -356,7 +356,7 @@ describe("computer use", () => {
   })
 
   describe("the computer tool", () => {
-    const context = (bot: Bot) => ({ userId: owner, botId: bot.id, runId: "r" })
+    const context = (bot: Bot) => ({ userId: owner, botId: bot.id, runId: "r", plan: "pro" as const })
     const call = (
       t: { execute?: unknown },
       input: unknown,
@@ -552,7 +552,7 @@ describe("computer use", () => {
       const fake = fakeSandbox()
       const theirs = await freshBot(stranger)
       const { computer } = computerTools(
-        { userId: owner, botId: theirs.id, runId: "r" },
+        { userId: owner, botId: theirs.id, runId: "r", plan: "pro" as const },
         fake,
         { settleMs: 0 }
       )

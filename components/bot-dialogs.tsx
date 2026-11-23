@@ -27,6 +27,7 @@ import { Spinner } from "@/components/ui/spinner"
 import { Textarea } from "@/components/ui/textarea"
 import { createBot, createGroupChat } from "@/lib/actions"
 import { randomBotFace } from "@/lib/bot-faces"
+import type { UsageSummary } from "@/lib/usage"
 
 export type SidebarChat = {
   id: string
@@ -39,6 +40,9 @@ export type SidebarBot = {
   job: string
   // Seed for the bot's face (see lib/bot-faces.ts)
   avatar: string
+  // The plan covers fewer bots than the user has, so this one can be read but
+  // not used.
+  readOnly: boolean
   ago: string
   // This bot's one-on-one chats, most recently active first.
   chats: SidebarChat[]
@@ -54,6 +58,8 @@ export type SidebarGroup = {
 type BotDialogs = {
   bots: SidebarBot[]
   groups: SidebarGroup[]
+  // What this month has used up, for the sidebar footer.
+  usage: UsageSummary | null
   openNewBot: () => void
   openNewGroup: () => void
 }
@@ -79,10 +85,12 @@ const JOB_SUGGESTIONS = [
 export function BotDialogsProvider({
   bots,
   groups,
+  usage,
   children,
 }: {
   bots: SidebarBot[]
   groups: SidebarGroup[]
+  usage: UsageSummary | null
   children: React.ReactNode
 }) {
   const [newBotOpen, setNewBotOpen] = React.useState(false)
@@ -92,10 +100,11 @@ export function BotDialogsProvider({
     () => ({
       bots,
       groups,
+      usage,
       openNewBot: () => setNewBotOpen(true),
       openNewGroup: () => setNewGroupOpen(true),
     }),
-    [bots, groups]
+    [bots, groups, usage]
   )
 
   return (
@@ -140,17 +149,22 @@ function NewBotForm({ onDone }: { onDone: () => void }) {
   // never runs during server rendering.
   const [avatar, setAvatar] = React.useState<string>(() => randomBotFace())
   const [error, setError] = React.useState<string | null>(null)
+  // The bot wasn't made because of a plan limit, so the message is an upgrade
+  // prompt rather than a mistake to fix.
+  const [upgrade, setUpgrade] = React.useState(false)
   const [pending, startTransition] = React.useTransition()
 
   function onSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
     setError(null)
+    setUpgrade(false)
 
     startTransition(async () => {
       const result = await createBot({ name, job, instructions, avatar })
 
       if ("error" in result) {
         setError(result.error)
+        setUpgrade(result.upgrade === true)
         return
       }
 
@@ -239,7 +253,16 @@ function NewBotForm({ onDone }: { onDone: () => void }) {
             className="min-h-24"
           />
         </Field>
-        {error && <FieldError>{error}</FieldError>}
+        {error && upgrade ? (
+          <p
+            role="alert"
+            className="rounded-md border bg-muted/50 px-3 py-2 text-sm"
+          >
+            {error}
+          </p>
+        ) : (
+          error && <FieldError>{error}</FieldError>
+        )}
       </FieldGroup>
 
       <DialogFooter>

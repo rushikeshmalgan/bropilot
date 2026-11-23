@@ -20,9 +20,16 @@ import {
 import type { RunHandle } from "@/lib/chat-types"
 import { db } from "@/lib/db"
 import { chats, messages, runs } from "@/lib/db/schema"
+import {
+  READ_ONLY_BOT_MESSAGE,
+  runLimitRefusal,
+  tokenLimitRefusal,
+  type PlanId,
+} from "@/lib/plans"
 import { getRunQueue } from "@/lib/providers"
 import type { RunQueue } from "@/lib/providers/run-queue"
 import { checkRateLimit } from "@/lib/rate-limit"
+import { activeBotIds, releaseRun, reserveRun } from "@/lib/usage"
 
 export type StartRunResult =
   | { ok: true; run: RunHandle; userMessageId: string }
@@ -32,15 +39,18 @@ export type StartRunResult =
       code: string
       error: string
       retryAfterSeconds?: number
+      // The refusal is a plan limit, so the screen can offer an upgrade.
+      upgrade?: boolean
     }
 
 function refuse(
   status: number,
   code: string,
   error: string,
-  retryAfterSeconds?: number
+  retryAfterSeconds?: number,
+  upgrade?: boolean
 ): StartRunResult {
-  return { ok: false, status, code, error, retryAfterSeconds }
+  return { ok: false, status, code, error, retryAfterSeconds, upgrade }
 }
 
 // Postgres reports a broken unique index with this code. The driver may wrap
@@ -77,10 +87,13 @@ export async function startRun({
   userId,
   chatId,
   text: rawText,
+  plan,
 }: {
   userId: string
   chatId: string
   text: string
+  // The user's plan, read from their session by the caller.
+  plan: PlanId
 }): Promise<StartRunResult> {
   const text = rawText.trim()
   if (!text) {
@@ -133,6 +146,24 @@ export async function startRun({
       : []
   const bot = pickBot(chat.bots, text, lastSpeaker)
 
+  // A plan covers a number of bots. The rest are kept but can't be used.
+  if (!(await activeBotIds(userId, plan)).includes(bot.id)) {
+    return refuse(403, "bot_read_only", READ_ONLY_BOT_MESSAGE)
+  }
+
+  // Take this reply from the month's allowance. The check and the count are
+  // one step, so replies started at the same moment can't pass the limit.
+  const reservation = await reserveRun(userId, plan)
+  if (!reservation.ok) {
+    const refusal =
+      reservation.reason === "runs"
+        ? runLimitRefusal(plan)
+        : tokenLimitRefusal(plan)
+    return refuse(402, refusal.code, refusal.error, undefined, refusal.upgrade)
+  }
+  // Given back if the reply turns out not to start.
+  const giveBack = () => releaseRun(userId, reservation.month).catch(() => {})
+
   const runId = nanoid()
   const userMessageId = nanoid()
   const assistantMessageId = nanoid()
@@ -157,6 +188,7 @@ export async function startRun({
         botId: bot.id,
         userMessageId,
         assistantMessageId,
+        plan,
       }),
       db
         .update(chats)
@@ -168,6 +200,7 @@ export async function startRun({
     await save()
   } catch (error) {
     if (!isUniqueViolation(error)) {
+      await giveBack()
       throw error
     }
 
@@ -177,6 +210,7 @@ export async function startRun({
     try {
       await save()
     } catch (again) {
+      await giveBack()
       if (!isUniqueViolation(again)) {
         throw again
       }
@@ -212,6 +246,8 @@ export async function startRun({
       ENQUEUE_FAILED_MESSAGE,
       ["queued"]
     )
+    // Our own failure isn't taken out of the user's allowance.
+    await giveBack()
   }
 
   return { ok: true, run: handle, userMessageId }

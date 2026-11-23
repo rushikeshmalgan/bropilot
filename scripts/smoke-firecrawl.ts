@@ -44,7 +44,7 @@ async function main() {
   )
 
   // The same call through the bot's tool, with real DNS for the safety check.
-  const tools = webTools(web, { userId: "smoke", botId: "smoke", runId: "smoke" })
+  const tools = webTools(web, { userId: "smoke", botId: "smoke", runId: "smoke", plan: "pro" })
   const blocked = (await tools.scrapePage.execute!(
     { url: "http://169.254.169.254/latest/meta-data/" },
     { toolCallId: "smoke", messages: [] } as never

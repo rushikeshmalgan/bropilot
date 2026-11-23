@@ -1,14 +1,19 @@
 import { auth } from "@clerk/nextjs/server"
 
 import { startRun } from "@/lib/agent/start-run"
+import { getPlan } from "@/lib/billing"
 
 function fail(
   status: number,
   code: string,
   error: string,
-  headers?: HeadersInit
+  headers?: HeadersInit,
+  upgrade?: boolean
 ) {
-  return Response.json({ error, code }, { status, headers })
+  return Response.json(
+    { error, code, ...(upgrade ? { upgrade: true } : {}) },
+    { status, headers }
+  )
 }
 
 // Saves the user's message and starts the bot's reply as a background run.
@@ -34,7 +39,13 @@ export async function POST(request: Request) {
     return fail(400, "bad_request", "That request wasn't valid.")
   }
 
-  const result = await startRun({ userId, chatId: id, text })
+  const result = await startRun({
+    userId,
+    chatId: id,
+    text,
+    // Read from the session here, because the background worker has none.
+    plan: await getPlan(userId),
+  })
   if (!result.ok) {
     return fail(
       result.status,
@@ -42,7 +53,8 @@ export async function POST(request: Request) {
       result.error,
       result.retryAfterSeconds
         ? { "Retry-After": String(result.retryAfterSeconds) }
-        : undefined
+        : undefined,
+      result.upgrade
     )
   }
 

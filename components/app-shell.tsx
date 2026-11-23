@@ -1,3 +1,4 @@
+import { auth } from "@clerk/nextjs/server"
 import { formatDistanceToNowStrict } from "date-fns"
 import { cookies } from "next/headers"
 
@@ -12,8 +13,10 @@ import {
   SidebarProvider,
   SidebarTrigger,
 } from "@/components/ui/sidebar"
+import { getPlan } from "@/lib/billing"
 import { listBots } from "@/lib/bots"
 import { listChats, listGroupChats } from "@/lib/chats"
+import { activeBotIds, getUsageSummary, type UsageSummary } from "@/lib/usage"
 
 function formatAgo(date: Date) {
   if (Date.now() - date.getTime() < 60_000) {
@@ -24,15 +27,20 @@ function formatAgo(date: Date) {
 }
 
 export async function AppShell({ children }: { children: React.ReactNode }) {
-  const [bots, chats, groups, cookieStore] = await Promise.all([
+  const { userId } = await auth.protect()
+  const plan = await getPlan(userId)
+  const [bots, chats, groups, cookieStore, usage, active] = await Promise.all([
     listBots(),
     listChats(),
     listGroupChats(),
     cookies(),
+    getUsageSummary(userId, plan),
+    activeBotIds(userId, plan),
   ])
 
   return (
     <AppShellFrame
+      usage={usage}
       bots={bots.map((bot) => {
         const botChats = chats.filter((chat) => chat.botId === bot.id)
 
@@ -41,6 +49,8 @@ export async function AppShell({ children }: { children: React.ReactNode }) {
           name: bot.name,
           job: bot.job,
           avatar: bot.avatar,
+          // Past what the plan covers: kept, but read-only.
+          readOnly: !active.includes(bot.id),
           // The sidebar shows when the bot was last talked to.
           ago: formatAgo(botChats[0]?.updatedAt ?? bot.createdAt),
           chats: botChats.map((chat) => ({ id: chat.id, title: chat.title })),
@@ -64,16 +74,18 @@ export async function AppShell({ children }: { children: React.ReactNode }) {
 export function AppShellFrame({
   bots,
   groups,
+  usage = null,
   defaultOpen,
   children,
 }: {
   bots: SidebarBot[]
   groups: SidebarGroup[]
+  usage?: UsageSummary | null
   defaultOpen: boolean
   children: React.ReactNode
 }) {
   return (
-    <BotDialogsProvider bots={bots} groups={groups}>
+    <BotDialogsProvider bots={bots} groups={groups} usage={usage}>
       <SidebarProvider
         defaultOpen={defaultOpen}
         style={{ "--sidebar-width-icon": "4rem" } as React.CSSProperties}

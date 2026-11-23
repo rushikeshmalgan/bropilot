@@ -46,6 +46,8 @@ import {
 } from "@/lib/db/schema"
 import { MEMORY_INDEX_PATH, memoryIndexForPrompt } from "@/lib/memory"
 import type { HostLookup } from "@/lib/net/url-safety"
+import { isPlanId } from "@/lib/plans"
+import { newMeter, recordRunUsage, type RunMeter } from "@/lib/usage"
 
 export type ExecuteRunDeps = {
   model?: LanguageModel
@@ -281,6 +283,31 @@ export async function executeRun(
   runId: string,
   deps: ExecuteRunDeps = {}
 ): Promise<ExecuteRunResult> {
+  const meter = newMeter()
+  const result = await runOnce(runId, deps, meter)
+
+  // Add the reply's tokens and sandbox time to the month's usage. It does
+  // nothing for a run that isn't finished, and counts a finished one only once
+  // however many times this is called.
+  if (result.status !== "missing") {
+    try {
+      await recordRunUsage(runId, meter)
+    } catch (error) {
+      console.error(
+        "Couldn't record a run's usage:",
+        error instanceof Error ? error.name : "unknown error"
+      )
+    }
+  }
+
+  return result
+}
+
+async function runOnce(
+  runId: string,
+  deps: ExecuteRunDeps,
+  meter: RunMeter
+): Promise<ExecuteRunResult> {
   if (typeof runId !== "string" || !runId) {
     return { status: "missing" }
   }
@@ -346,6 +373,9 @@ export async function executeRun(
     userId: context.chat.userId,
     botId: run.botId,
     runId: run.id,
+    // The plan the user was on when they sent the message.
+    plan: isPlanId(run.plan) ? run.plan : "free",
+    meter,
     hostLookup: deps.hostLookup,
   })
 
@@ -496,6 +526,9 @@ export async function executeRun(
         // what the tools found and say what happened.
         attempt.parts.push({ type: "text", text: OUT_OF_STEPS_MESSAGE })
       }
+
+      meter.inputTokens += attempt.usage?.inputTokens ?? 0
+      meter.outputTokens += attempt.usage?.outputTokens ?? 0
 
       // The run and its message finish together, and only if the run is still
       // running: a Stop that got there first wins and this changes nothing.

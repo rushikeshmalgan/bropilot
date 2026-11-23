@@ -128,7 +128,7 @@ function call<I, O>(
 }
 
 describe("web tools", () => {
-  const context = { userId: "u", botId: "b", runId: "r", hostLookup: lookup }
+  const context = { userId: "u", botId: "b", runId: "r", plan: "pro" as const, hostLookup: lookup }
 
   it("returns search results, clipped and marked as untrusted", async () => {
     const web = fakeWeb({

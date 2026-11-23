@@ -104,6 +104,7 @@ async function full() {
       userId,
       chatId,
       text: "Say hello in five words or fewer.",
+      plan: "pro",
     })
     if (!started.ok) {
       fail(`the message was refused: ${started.code}`)

@@ -3,15 +3,17 @@ import { notFound } from "next/navigation"
 
 import { AppShell } from "@/components/app-shell"
 import { ChatView } from "@/components/chat-view"
+import { getPlan } from "@/lib/billing"
 import type { ChatMessage } from "@/lib/chat-types"
 import { loadChatPage } from "@/lib/chats"
+import { activeBotIds } from "@/lib/usage"
 
 export default async function ChatPage({
   params,
 }: {
   params: Promise<{ id: string }>
 }) {
-  await auth.protect()
+  const { userId } = await auth.protect()
 
   const { id } = await params
 
@@ -23,6 +25,12 @@ export default async function ChatPage({
   }
 
   const { chat, messages, activeRun } = page
+
+  // The plan covers a number of bots; the rest can be read but not used. A
+  // group chat is read-only only if none of its bots can be used.
+  const active = await activeBotIds(userId, await getPlan(userId))
+  const readOnly =
+    chat.bots.length > 0 && chat.bots.every((bot) => !active.includes(bot.id))
 
   return (
     <AppShell>
@@ -42,6 +50,7 @@ export default async function ChatPage({
         )}
         // The screen reattaches to a reply that is still being written.
         activeRunId={activeRun?.id ?? null}
+        readOnly={readOnly}
       />
     </AppShell>
   )

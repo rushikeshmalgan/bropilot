@@ -1,5 +1,6 @@
 import { auth } from "@clerk/nextjs/server"
 
+import { getPlan } from "@/lib/billing"
 import { connectDesktop, getDesktopStatus } from "@/lib/desktop"
 import { checkLimit } from "@/lib/rate-limit"
 
@@ -59,7 +60,9 @@ export async function GET(
     return owner.response
   }
 
-  const status = await getDesktopStatus(owner.userId, owner.botId)
+  const status = await getDesktopStatus(owner.userId, owner.botId, {
+    plan: await getPlan(owner.userId),
+  })
   if (!status) {
     return reply({ error: "That bot doesn't exist.", code: "not_found" }, 404)
   }
@@ -108,10 +111,15 @@ export async function POST(
     return reply({ error: "That request wasn't valid.", code: "bad_request" }, 400)
   }
 
-  const connection = await connectDesktop(owner.userId, owner.botId, {
-    start: body.start === true,
-    control: body.control === true,
-  })
+  const connection = await connectDesktop(
+    owner.userId,
+    owner.botId,
+    {
+      start: body.start === true,
+      control: body.control === true,
+    },
+    { plan: await getPlan(owner.userId) }
+  )
   if (!connection) {
     return reply({ error: "That bot doesn't exist.", code: "not_found" }, 404)
   }

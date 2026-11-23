@@ -7,7 +7,7 @@
 // "test_" and smoke scripts "smoke_". Real Clerk user IDs start with "user_".
 import "./env"
 
-import { like, or } from "drizzle-orm"
+import { like, or, sql } from "drizzle-orm"
 
 async function main() {
   const { db } = await import("@/lib/db")
@@ -22,6 +22,10 @@ async function main() {
     .delete(bots)
     .where(or(like(bots.userId, "test\\_%"), like(bots.userId, "smoke\\_%")))
     .returning({ id: bots.id })
+
+  await db.execute(
+    sql`delete from usage where user_id like 'test\\_%' or user_id like 'smoke\\_%'`
+  )
 
   console.log(
     `Removed ${removedChats.length} chat(s) and ${removedBots.length} bot(s) left by tests.`

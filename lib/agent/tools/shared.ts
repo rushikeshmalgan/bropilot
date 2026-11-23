@@ -1,6 +1,8 @@
 // What every bot tool shares: the limits on what a tool may hand back to the
 // model, and the shape of a failure.
 import type { HostLookup } from "@/lib/net/url-safety"
+import type { PlanId } from "@/lib/plans"
+import type { RunMeter } from "@/lib/usage"
 
 // The hard cap on text one tool call returns to the model (and saves with the
 // message). Longer output is cut off and marked as cut.
@@ -17,6 +19,11 @@ export type ToolContext = {
   userId: string
   botId: string
   runId: string
+  // The user's plan when this reply was started. Tools the plan doesn't
+  // include aren't offered, and sandbox creation checks it again.
+  plan: PlanId
+  // Where tools report the sandbox time they use, for the month's usage.
+  meter?: RunMeter
   // Resolves host names for the URL safety check. Tests pass their own.
   hostLookup?: HostLookup
 }

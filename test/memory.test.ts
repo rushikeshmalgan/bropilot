@@ -469,7 +469,7 @@ describe("memory files", () => {
       content: "Not yours",
       expectedVersion: null,
     })
-    const tools = memoryTools({ userId: owner, botId: bot.id, runId: "r" })
+    const tools = memoryTools({ userId: owner, botId: bot.id, runId: "r", plan: "pro" as const })
     const call = <I,>(t: { execute?: unknown }, input: I) =>
       (t.execute as (input: I, options: never) => Promise<unknown>)(input, {
         toolCallId: "t",

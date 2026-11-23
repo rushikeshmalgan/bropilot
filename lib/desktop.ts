@@ -11,6 +11,7 @@ import {
   readSandboxId,
   type SandboxFailure,
 } from "@/lib/sandbox"
+import { computerRefusal, planLimits, type PlanId } from "@/lib/plans"
 import { getSandboxProvider } from "@/lib/providers"
 import {
   SandboxProviderError,
@@ -29,10 +30,12 @@ export type DesktopStatus =
       configured: true
       state: "stopped" | "starting" | "live" | "error" | "deleting"
       // Why it is stopped or in error, in words the screen can show.
-      reason?: "no_sandbox" | "unreachable" | "failed"
+      // plan: the user's plan doesn't include a screen
+      reason?: "no_sandbox" | "unreachable" | "failed" | "plan"
     }
 
-type Deps = { provider?: SandboxProvider | null }
+// The plan is always passed in: a screen is part of the paid plan.
+type Deps = { provider?: SandboxProvider | null; plan: PlanId }
 
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined
@@ -49,7 +52,7 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
 export async function getDesktopStatus(
   userId: string,
   botId: string,
-  deps: Deps = {}
+  deps: Deps
 ): Promise<DesktopStatus | null> {
   const provider =
     deps.provider === undefined ? getSandboxProvider() : deps.provider
@@ -60,6 +63,9 @@ export async function getDesktopStatus(
   }
   if (!provider) {
     return { configured: false }
+  }
+  if (!planLimits(deps.plan).computerUse) {
+    return { configured: true, state: "stopped", reason: "plan" }
   }
   if (!bot.sandboxId) {
     return { configured: true, state: "stopped", reason: "no_sandbox" }
@@ -145,12 +151,15 @@ export async function connectDesktop(
   userId: string,
   botId: string,
   options: { start?: boolean; control?: boolean } = {},
-  deps: Deps = {}
+  deps: Deps
 ): Promise<DesktopConnection | null> {
   const provider =
     deps.provider === undefined ? getSandboxProvider() : deps.provider
 
-  let status = await getDesktopStatus(userId, botId, { provider })
+  let status = await getDesktopStatus(userId, botId, {
+    provider,
+    plan: deps.plan,
+  })
   if (!status) {
     return null
   }
@@ -158,16 +167,17 @@ export async function connectDesktop(
     return { status }
   }
 
-  if (
-    options.start &&
-    status.state === "stopped" &&
-    status.reason !== "no_sandbox"
-  ) {
+  // Only a plain "off" is woken: not a missing sandbox, and not a plan that
+  // doesn't include a screen.
+  if (options.start && status.state === "stopped" && !status.reason) {
     const bot = await readSandboxId(userId, botId)
     if (bot?.sandboxId && !isPending(bot.sandboxId)) {
       const woke = await wake(provider, bot.sandboxId)
       status = woke
-        ? ((await getDesktopStatus(userId, botId, { provider })) ?? status)
+        ? ((await getDesktopStatus(userId, botId, {
+            provider,
+            plan: deps.plan,
+          })) ?? status)
         : { configured: true, state: "error", reason: "failed" }
     }
   }
@@ -202,12 +212,23 @@ export type DesktopReady =
 export async function ensureDesktop(
   userId: string,
   botId: string,
-  deps: Deps = {}
+  deps: Deps
 ): Promise<DesktopReady> {
   const provider =
     deps.provider === undefined ? getSandboxProvider() : deps.provider
 
-  const sandbox = await getOrCreateSandbox(userId, botId, { provider })
+  if (!planLimits(deps.plan).computerUse) {
+    return {
+      ok: false,
+      code: "plan_limit",
+      error: computerRefusal(deps.plan).error,
+    }
+  }
+
+  const sandbox = await getOrCreateSandbox(userId, botId, {
+    provider,
+    plan: deps.plan,
+  })
   if (!sandbox.ok) {
     return sandbox
   }

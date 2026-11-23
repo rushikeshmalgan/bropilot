@@ -98,7 +98,10 @@ export function computerTools(
     }
 
     const provider = providerOverride ?? getSandboxProvider()
-    const found = await ensureDesktop(context.userId, context.botId, { provider })
+    const found = await ensureDesktop(context.userId, context.botId, {
+      provider,
+      plan: context.plan,
+    })
     if (!found.ok) {
       return { error: found.error } as const
     }
@@ -230,7 +233,18 @@ export function computerTools(
           // Counted whether or not it works, so a failing action can't loop.
           used++
 
-          return (await perform(input, aborted)) as ComputerResult
+          const started = Date.now()
+          try {
+            return (await perform(input, aborted)) as ComputerResult
+          } finally {
+            // Time on the screen counts as sandbox time.
+            if (context.meter) {
+              context.meter.sandboxSeconds += Math.max(
+                1,
+                Math.ceil((Date.now() - started) / 1000)
+              )
+            }
+          }
         } catch (error) {
           return toolFailure(error, "That screen action didn't work.")
         }

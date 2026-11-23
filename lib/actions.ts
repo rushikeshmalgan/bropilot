@@ -14,23 +14,25 @@ import {
   MAX_TITLE_LENGTH,
   insertChat,
   removeChat,
+  selectBot,
 } from "@/lib/chat-store"
 import {
   isActiveRunStatus,
   type RunHandle,
   type RunSnapshot,
 } from "@/lib/chat-types"
-import { db } from "@/lib/db"
-import { bots } from "@/lib/db/schema"
 import {
   deleteMemory,
   readMemory,
   writeMemory,
   type MemoryFile,
 } from "@/lib/memory"
+import { getPlan } from "@/lib/billing"
 import { removeBot } from "@/lib/bot-delete"
 import { getRunQueue } from "@/lib/providers"
+import { botLimitRefusal, READ_ONLY_BOT_MESSAGE } from "@/lib/plans"
 import { resetSandbox as resetBotSandbox } from "@/lib/sandbox"
+import { activeBotIds, createBotWithinLimit } from "@/lib/usage"
 
 type CreateBotInput = {
   name: string
@@ -39,9 +41,17 @@ type CreateBotInput = {
   avatar: string
 }
 
+// True for a bot the user owns that their plan doesn't cover any more. Such a
+// bot is read-only: its chats and memory can be read but not changed.
+async function isReadOnlyBot(userId: string, botId: string) {
+  const plan = await getPlan(userId)
+  const active = await activeBotIds(userId, plan)
+  return !active.includes(botId) && Boolean(await selectBot(userId, botId))
+}
+
 export async function createBot(
   input: CreateBotInput
-): Promise<{ id: string } | { error: string }> {
+): Promise<{ id: string } | { error: string; upgrade?: boolean }> {
   // Server Functions can be called directly, so check the user here too.
   const { userId } = await auth()
   if (!userId) {
@@ -66,16 +76,18 @@ export async function createBot(
     return { error: "Pick a face." }
   }
 
-  const [bot] = await db
-    .insert(bots)
-    .values({
-      userId,
-      name,
-      job,
-      instructions: instructions || null,
-      avatar,
-    })
-    .returning({ id: bots.id })
+  // The count and the insert are one step, so bots created at the same
+  // moment can't go past what the plan allows.
+  const plan = await getPlan(userId)
+  const bot = await createBotWithinLimit(
+    userId,
+    { name, job, instructions: instructions || null, avatar },
+    plan
+  )
+  if (!bot) {
+    const refusal = botLimitRefusal(plan)
+    return { error: refusal.error, upgrade: refusal.upgrade }
+  }
 
   // The bot list lives in the sidebar on every page.
   revalidatePath("/", "layout")
@@ -98,6 +110,9 @@ export async function createChat(
   }
   if (typeof botId !== "string" || !botId) {
     return { error: "Pick a bot." }
+  }
+  if (await isReadOnlyBot(userId, botId)) {
+    return { error: READ_ONLY_BOT_MESSAGE }
   }
 
   const id = await insertChat(userId, { botIds: [botId] })
@@ -284,6 +299,10 @@ export async function saveMemoryFile(
     return { error: "That save wasn't valid." }
   }
 
+  if (await isReadOnlyBot(userId, botId)) {
+    return { error: READ_ONLY_BOT_MESSAGE }
+  }
+
   const result = await writeMemory(userId, botId, {
     path,
     content,
@@ -307,6 +326,10 @@ export async function deleteMemoryFile(
   }
   if (!validId(botId) || !validMemoryPath(path)) {
     return { error: "That memory file doesn't exist." }
+  }
+
+  if (await isReadOnlyBot(userId, botId)) {
+    return { error: READ_ONLY_BOT_MESSAGE }
   }
 
   const result = await deleteMemory(userId, botId, path)

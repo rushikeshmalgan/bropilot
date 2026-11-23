@@ -21,7 +21,7 @@ type ScreenReply =
   | {
       configured: true
       state: ScreenState
-      reason?: "no_sandbox" | "unreachable" | "failed"
+      reason?: "no_sandbox" | "unreachable" | "failed" | "plan"
       url?: string
       expiresInSeconds?: number
     }
@@ -277,6 +277,12 @@ export function ScreenViewer({
                 Try again
               </Button>
             }
+          />
+        ) : reply && reply.configured && reply.reason === "plan" ? (
+          <Message
+            icon={<MonitorIcon className="text-muted-foreground" />}
+            title="Screens are part of the Pro plan"
+            text={`Upgrade to Pro to let ${botName} use a screen and a computer of its own.`}
           />
         ) : reply && reply.configured && reply.reason === "no_sandbox" ? (
           <Message

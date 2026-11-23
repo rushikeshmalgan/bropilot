@@ -7,6 +7,7 @@ import { memoryTools } from "@/lib/agent/tools/memory"
 import { sandboxTools } from "@/lib/agent/tools/sandbox"
 import type { ToolContext } from "@/lib/agent/tools/shared"
 import { webTools } from "@/lib/agent/tools/web"
+import { planLimits } from "@/lib/plans"
 import { getSandboxProvider, getWebProvider } from "@/lib/providers"
 
 // What the bot can do in this run, for the system prompt.
@@ -24,21 +25,25 @@ export function buildTools(context: ToolContext): {
   tools: ToolSet
   capabilities: Capabilities
 } {
+  const limits = planLimits(context.plan)
   const web = getWebProvider()
-  const sandbox = getSandboxProvider()
+  // Only what the plan includes is offered: the bot never sees a tool it
+  // couldn't use.
+  const sandbox = limits.sandboxes ? getSandboxProvider() : null
+  const screen = limits.computerUse ? sandbox : null
 
   return {
     tools: {
       ...memoryTools(context),
       ...(web ? webTools(web, context) : {}),
       ...(sandbox ? sandboxTools(context, sandbox) : {}),
-      ...(sandbox ? computerTools(context, sandbox) : {}),
+      ...(screen ? computerTools(context, screen) : {}),
     },
     capabilities: {
       web: web !== null,
       memory: true,
       sandbox: sandbox !== null,
-      computer: sandbox !== null,
+      computer: screen !== null,
     },
   }
 }

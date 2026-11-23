@@ -3,6 +3,7 @@ import { asc, eq } from "drizzle-orm"
 import { startRun } from "@/lib/agent/start-run"
 import { insertChat } from "@/lib/chat-store"
 import { textOfParts } from "@/lib/chat-types"
+import type { PlanId } from "@/lib/plans"
 import { db } from "@/lib/db"
 import { messages, runs } from "@/lib/db/schema"
 
@@ -16,8 +17,13 @@ export async function newChat(userId: string, botId: string) {
 }
 
 // Sends a message the way the chat route does and returns the started run.
-export async function send(userId: string, chatId: string, text = "Hello") {
-  const result = await startRun({ userId, chatId, text })
+export async function send(
+  userId: string,
+  chatId: string,
+  text = "Hello",
+  plan: PlanId = "pro"
+) {
+  const result = await startRun({ userId, chatId, text, plan })
   if (!result.ok) {
     throw new Error(`startRun refused: ${result.code}`)
   }

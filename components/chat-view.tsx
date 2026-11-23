@@ -58,6 +58,7 @@ import {
 import { toast } from "@/components/ui/toast"
 import { attachRun, deleteChat, stopRun } from "@/lib/actions"
 import { MAX_MESSAGE_LENGTH } from "@/lib/chat-limits"
+import { READ_ONLY_BOT_MESSAGE } from "@/lib/plans"
 import {
   applyRunProgress,
   applyRunSnapshot,
@@ -79,9 +80,12 @@ type ChatViewProps = {
   initialMessages?: ChatMessage[]
   // A reply that was still being written when the page loaded.
   activeRunId?: string | null
+  // The user's plan no longer covers this bot: the chat can be read, not added to.
+  readOnly?: boolean
 }
 
-const SEND_FAILED = "Couldn't reach the server. Check your connection and try again."
+const SEND_FAILED =
+  "Couldn't reach the server. Check your connection and try again."
 
 export function ChatView(props: ChatViewProps) {
   // The provider lets the view put text back in the box if a message is refused.
@@ -97,6 +101,7 @@ function ChatViewInner({
   bots,
   initialMessages = [],
   activeRunId = null,
+  readOnly = false,
 }: ChatViewProps) {
   const router = useRouter()
   const { textInput } = usePromptInputController()
@@ -229,7 +234,9 @@ function ChatViewInner({
         const userMessageId = body.userMessageId
         setMessages((current) => [
           ...current.map((message) =>
-            message.id === pendingId ? { ...message, id: userMessageId } : message
+            message.id === pendingId
+              ? { ...message, id: userMessageId }
+              : message
           ),
           placeholderReply(started),
         ])
@@ -276,7 +283,10 @@ function ChatViewInner({
     setDeleting(false)
 
     if ("error" in result) {
-      toast.add({ title: "Couldn't delete the chat", description: result.error })
+      toast.add({
+        title: "Couldn't delete the chat",
+        description: result.error,
+      })
       return
     }
 
@@ -289,9 +299,9 @@ function ChatViewInner({
   // computer tool in it.
   const usingScreen = Boolean(
     run &&
-      messages
-        .find((message) => message.id === run.assistantMessageId)
-        ?.parts.some((part) => part.type === "tool" && part.name === "computer")
+    messages
+      .find((message) => message.id === run.assistantMessageId)
+      ?.parts.some((part) => part.type === "tool" && part.name === "computer")
   )
   const heading = chat.isGroup ? chat.title : (bot?.name ?? chat.title)
   // A reply with nothing in it yet is shown as "Thinking…"; one that is over
@@ -496,41 +506,50 @@ function ChatViewInner({
           )}
         </div>
 
-        <PromptInput
-          className="mx-auto w-full max-w-3xl shrink-0 p-4"
-          groupClassName="rounded-xl bg-secondary dark:bg-secondary"
-          onSubmit={handleSubmit}
-        >
-          <PromptInputBody>
-            <PromptInputTextarea
-              placeholder={
-                chat.isGroup
-                  ? "Message, or @name to pick a bot"
-                  : "What would you like to know?"
-              }
-              maxLength={MAX_MESSAGE_LENGTH}
-              rows={1}
-              className="min-h-0 px-3 pt-2.5 pb-1.5"
-            />
-          </PromptInputBody>
-          <PromptInputFooter className="px-2.5 pb-2.5">
-            <PromptInputTools>
-              <PromptInputButton size="icon-sm" aria-label="Add attachment">
-                <PlusIcon />
-              </PromptInputButton>
-            </PromptInputTools>
-            <PromptInputSubmit
-              // "streaming" shows the Stop button; "submitted" a spinner.
-              status={
-                run && !stopping ? "streaming" : busy ? "submitted" : "ready"
-              }
-              onStop={stop}
-              // Not `disabled`: that would dim the whole composer.
-              aria-disabled={!busy && !textInput.value.trim()}
-              className="aria-disabled:opacity-50"
-            />
-          </PromptInputFooter>
-        </PromptInput>
+        {readOnly ? (
+          <p
+            role="note"
+            className="mx-auto w-full max-w-3xl shrink-0 p-4 text-center text-sm text-muted-foreground"
+          >
+            {READ_ONLY_BOT_MESSAGE}
+          </p>
+        ) : (
+          <PromptInput
+            className="mx-auto w-full max-w-3xl shrink-0 p-4"
+            groupClassName="rounded-xl bg-secondary dark:bg-secondary"
+            onSubmit={handleSubmit}
+          >
+            <PromptInputBody>
+              <PromptInputTextarea
+                placeholder={
+                  chat.isGroup
+                    ? "Message, or @name to pick a bot"
+                    : "What would you like to know?"
+                }
+                maxLength={MAX_MESSAGE_LENGTH}
+                rows={1}
+                className="min-h-0 px-3 pt-2.5 pb-1.5"
+              />
+            </PromptInputBody>
+            <PromptInputFooter className="px-2.5 pb-2.5">
+              <PromptInputTools>
+                <PromptInputButton size="icon-sm" aria-label="Add attachment">
+                  <PlusIcon />
+                </PromptInputButton>
+              </PromptInputTools>
+              <PromptInputSubmit
+                // "streaming" shows the Stop button; "submitted" a spinner.
+                status={
+                  run && !stopping ? "streaming" : busy ? "submitted" : "ready"
+                }
+                onStop={stop}
+                // Not `disabled`: that would dim the whole composer.
+                aria-disabled={!busy && !textInput.value.trim()}
+                className="aria-disabled:opacity-50"
+              />
+            </PromptInputFooter>
+          </PromptInput>
+        )}
       </div>
 
       {bot && workspaceOpen && (

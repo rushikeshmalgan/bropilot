@@ -19,6 +19,7 @@ import { nanoid } from "nanoid"
 
 import { db } from "@/lib/db"
 import { bots } from "@/lib/db/schema"
+import { planLimits, sandboxRefusal, type PlanId } from "@/lib/plans"
 import { getSandboxProvider } from "@/lib/providers"
 import {
   SandboxProviderError,
@@ -45,7 +46,7 @@ export const SANDBOX_NOT_CONFIGURED_MESSAGE =
 
 export type SandboxFailure = {
   ok: false
-  code: "not_configured" | "not_found" | "busy" | "failed"
+  code: "not_configured" | "not_found" | "busy" | "failed" | "plan_limit"
   // Safe to show the user and the model.
   error: string
 }
@@ -59,6 +60,10 @@ type Deps = {
   now?: () => number
   pollMs?: number
 }
+
+// Making or using a sandbox needs the plan to include them, so the plan is
+// always passed in.
+type CreateDeps = Deps & { plan: PlanId }
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms))
@@ -165,12 +170,15 @@ async function removeOrphans(provider: SandboxProvider, botId: string) {
 export async function getOrCreateSandbox(
   userId: string,
   botId: string,
-  deps: Deps = {}
+  deps: CreateDeps
 ): Promise<SandboxLookup> {
   const provider =
     deps.provider === undefined ? getSandboxProvider() : deps.provider
   if (!provider) {
     return fail("not_configured", SANDBOX_NOT_CONFIGURED_MESSAGE)
+  }
+  if (!planLimits(deps.plan).sandboxes) {
+    return fail("plan_limit", sandboxRefusal(deps.plan).error)
   }
 
   const now = deps.now ?? Date.now

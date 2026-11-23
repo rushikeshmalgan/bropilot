@@ -69,6 +69,7 @@ export function sandboxTools(
 
     const found = await getOrCreateSandbox(context.userId, context.botId, {
       provider,
+      plan: context.plan,
     })
     return found.ok
       ? ({ provider, id: found.sandboxId } as const)
@@ -118,7 +119,11 @@ export function sandboxTools(
           const result = await ready.provider.exec(ready.id, command, {
             timeoutSeconds: limit,
           })
-          secondsLeft -= Math.max(1, Math.ceil((Date.now() - started) / 1000))
+          const used = Math.max(1, Math.ceil((Date.now() - started) / 1000))
+          secondsLeft -= used
+          if (context.meter) {
+            context.meter.sandboxSeconds += used
+          }
 
           const output = clipMiddle(result.output, MAX_TOOL_OUTPUT_CHARS)
           return {

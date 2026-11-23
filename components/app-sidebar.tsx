@@ -9,6 +9,7 @@ import { PlusIcon, SearchIcon, UsersIcon } from "lucide-react"
 
 import { BotAvatar } from "@/components/bot-avatar"
 import { useBotDialogs } from "@/components/bot-dialogs"
+import { UsageMeter } from "@/components/usage-meter"
 import { toast } from "@/components/ui/toast"
 import { createChat } from "@/lib/actions"
 import { Button } from "@/components/ui/button"
@@ -59,7 +60,7 @@ function UserMenuPlaceholder() {
 }
 
 export function AppSidebar() {
-  const { bots, groups, openNewBot, openNewGroup } = useBotDialogs()
+  const { bots, groups, usage, openNewBot, openNewGroup } = useBotDialogs()
   const pathname = usePathname()
   const router = useRouter()
   const [searchOpen, setSearchOpen] = React.useState(false)
@@ -177,6 +178,7 @@ export function AppSidebar() {
                       </span>
                     </div>
                     <span className="truncate text-xs text-muted-foreground">
+                      {bot.readOnly ? "Read-only · " : ""}
                       {bot.job}
                     </span>
                   </div>
@@ -238,7 +240,8 @@ export function AppSidebar() {
         </SidebarGroup>
       </SidebarContent>
 
-      <SidebarFooter className="px-3 py-3">
+      <SidebarFooter className="gap-3 px-3 py-3">
+        {usage && <UsageMeter usage={usage} />}
         {/* Clerk renders the user menu only once it has loaded, which can be
             before or after React hydrates. Showing it inside Show and
             Suspense, as Clerk's docs do, keeps the server and browser markup

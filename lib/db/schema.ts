@@ -167,6 +167,12 @@ export const runs = pgTable(
     // The task queue's own ID for this run (a Trigger.dev run ID).
     triggerRunId: text("trigger_run_id"),
     status: text("status").$type<RunStatus>().notNull().default("queued"),
+    // The plan the user was on when the reply was started ("free" or "pro").
+    // The worker has no session to ask, so it reads the plan from here.
+    plan: text("plan").notNull().default("free"),
+    // Set once the run's tokens and sandbox time have been added to the user's
+    // usage, so they can't be added twice.
+    usageCountedAt: timestamp("usage_counted_at", { withTimezone: true }),
     // A message that is safe to show the user; set when status is "error".
     error: text("error"),
     createdAt: timestamp("created_at", { withTimezone: true })
@@ -186,6 +192,26 @@ export const runs = pgTable(
 )
 
 export type Run = typeof runs.$inferSelect
+
+// What each user has used in each calendar month (UTC). `runs` counts replies
+// started; tokens and sandbox minutes are added when a reply ends. See
+// lib/usage.ts for how the numbers are kept safe under parallel requests.
+export const usage = pgTable(
+  "usage",
+  {
+    // Clerk user ID
+    userId: text("user_id").notNull(),
+    // "2026-11"
+    month: text("month").notNull(),
+    runs: integer("runs").notNull().default(0),
+    sandboxMinutes: integer("sandbox_minutes").notNull().default(0),
+    inputTokens: integer("input_tokens").notNull().default(0),
+    outputTokens: integer("output_tokens").notNull().default(0),
+  },
+  (table) => [primaryKey({ columns: [table.userId, table.month] })]
+)
+
+export type UsageRow = typeof usage.$inferSelect
 
 // A bot's memory: small text files it keeps between chats. Each bot has its
 // own, and they go when the bot is deleted.
