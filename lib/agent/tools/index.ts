@@ -3,15 +3,18 @@
 import type { ToolSet } from "ai"
 
 import { memoryTools } from "@/lib/agent/tools/memory"
+import { sandboxTools } from "@/lib/agent/tools/sandbox"
 import type { ToolContext } from "@/lib/agent/tools/shared"
 import { webTools } from "@/lib/agent/tools/web"
-import { getWebProvider } from "@/lib/providers"
+import { getSandboxProvider, getWebProvider } from "@/lib/providers"
 
 // What the bot can do in this run, for the system prompt.
 export type Capabilities = {
   web: boolean
   // Memory needs no outside service, so every bot has it.
   memory: boolean
+  // A Linux sandbox of its own (made the first time a tool uses it).
+  sandbox: boolean
 }
 
 export function buildTools(context: ToolContext): {
@@ -19,12 +22,18 @@ export function buildTools(context: ToolContext): {
   capabilities: Capabilities
 } {
   const web = getWebProvider()
+  const sandbox = getSandboxProvider()
 
   return {
     tools: {
       ...memoryTools(context),
       ...(web ? webTools(web, context) : {}),
+      ...(sandbox ? sandboxTools(context, sandbox) : {}),
     },
-    capabilities: { web: web !== null, memory: true },
+    capabilities: {
+      web: web !== null,
+      memory: true,
+      sandbox: sandbox !== null,
+    },
   }
 }

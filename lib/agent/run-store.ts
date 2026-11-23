@@ -229,3 +229,25 @@ export async function cancelActiveRuns(userId: string, chatId: string) {
   await db.batch(cancelStatements(active))
   await cancelInQueue(active)
 }
+
+// Stops every unfinished reply by one of the user's bots, in any of their
+// chats. Used when the bot is deleted.
+export async function cancelActiveRunsForBot(userId: string, botId: string) {
+  const active = await db
+    .select({ run: runs })
+    .from(runs)
+    .innerJoin(chats, eq(chats.id, runs.chatId))
+    .where(
+      and(
+        eq(runs.botId, botId),
+        eq(chats.userId, userId),
+        inArray(runs.status, [...ACTIVE_RUN_STATUSES])
+      )
+    )
+
+  for (const { run } of active) {
+    await db.batch(cancelStatements(run))
+    await cancelInQueue(run)
+  }
+}
+

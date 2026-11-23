@@ -1,12 +1,15 @@
 // Where the app gets its outside services from. Each one is used only when its
 // environment variable holds a usable value; otherwise the getter returns null
 // and the feature shows a "not configured" state instead of failing.
+import { daytonaProvider } from "@/lib/providers/daytona"
 import { firecrawlProvider, type WebProvider } from "@/lib/providers/firecrawl"
 import { triggerRunQueue, type RunQueue } from "@/lib/providers/run-queue"
+import type { SandboxProvider } from "@/lib/providers/sandbox"
 
 type Providers = {
   runQueue: RunQueue | null
   web: WebProvider | null
+  sandbox: SandboxProvider | null
 }
 
 // Tests replace providers with in-memory fakes through this. The app itself
@@ -52,4 +55,24 @@ export function getWebProvider(): WebProvider | null {
 
   const key = usableSecret("FIRECRAWL_API_KEY")
   return key ? firecrawlProvider(key) : null
+}
+
+// Sandboxes (Daytona), or null without DAYTONA_API_KEY.
+let daytona: { key: string; provider: SandboxProvider } | null = null
+
+export function getSandboxProvider(): SandboxProvider | null {
+  if ("sandbox" in overrides) {
+    return overrides.sandbox ?? null
+  }
+
+  const key = usableSecret("DAYTONA_API_KEY")
+  if (!key) {
+    return null
+  }
+
+  // One provider per key, so its client is made once.
+  if (daytona?.key !== key) {
+    daytona = { key, provider: daytonaProvider(key) }
+  }
+  return daytona.provider
 }

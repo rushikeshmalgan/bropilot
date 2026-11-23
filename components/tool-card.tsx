@@ -4,9 +4,12 @@ import {
   BrainIcon,
   CheckIcon,
   ChevronRightIcon,
+  FilePenIcon,
   FileTextIcon,
+  FolderOpenIcon,
   GlobeIcon,
   SearchIcon,
+  TerminalIcon,
   TriangleAlertIcon,
   WrenchIcon,
   type LucideIcon,
@@ -37,6 +40,26 @@ const TOOLS: Record<
     icon: GlobeIcon,
     summary: (input) => text(input.url),
   },
+  bash: {
+    label: "Ran a command",
+    icon: TerminalIcon,
+    summary: (input) => text(input.command).split("\n")[0],
+  },
+  readFile: {
+    label: "Read a file",
+    icon: FileTextIcon,
+    summary: (input) => text(input.path),
+  },
+  writeFile: {
+    label: "Saved a file",
+    icon: FilePenIcon,
+    summary: (input) => text(input.path),
+  },
+  listFiles: {
+    label: "Listed files",
+    icon: FolderOpenIcon,
+    summary: (input) => text(input.path) || "home folder",
+  },
   memoryList: {
     label: "Looked through memory",
     icon: BrainIcon,
@@ -62,6 +85,35 @@ function fields(value: unknown): Fields {
 
 function text(value: unknown) {
   return typeof value === "string" ? value : ""
+}
+
+// What a card shows under "Sent". Commands and files read better as plain
+// text than as JSON with escaped line breaks.
+function sentText(name: string, input: unknown) {
+  const fields_ = fields(input)
+  if (name === "bash" && typeof fields_.command === "string") {
+    return fields_.command
+  }
+  if (name === "writeFile" && typeof fields_.content === "string") {
+    return `${text(fields_.path)}\n\n${fields_.content}`
+  }
+  return pretty(input)
+}
+
+// The same for what came back.
+function resultText(name: string, output: unknown) {
+  const result = fields(output)
+  if (name === "bash" && typeof result.output === "string") {
+    const header =
+      result.timedOut === true
+        ? "stopped: time limit"
+        : `exit code ${String(result.exitCode)}`
+    return `${header}\n${result.output}`
+  }
+  if (name === "readFile" && typeof result.content === "string") {
+    return result.content
+  }
+  return pretty(output)
 }
 
 function pretty(value: unknown) {
@@ -124,7 +176,7 @@ export function ToolCard({
       <CollapsibleContent>
         <div className="flex flex-col gap-2 border-t px-2.5 py-2">
           <Section title="Sent" icon={FileTextIcon}>
-            {pretty(part.input)}
+            {sentText(part.name, part.input)}
           </Section>
           {part.state !== "running" && (
             <Section
@@ -132,7 +184,9 @@ export function ToolCard({
               icon={failed ? TriangleAlertIcon : CheckIcon}
               tone={failed ? "error" : undefined}
             >
-              {failed ? text(output.error) || "The tool call failed." : pretty(part.output)}
+              {failed
+                ? text(output.error) || "The tool call failed."
+                : resultText(part.name, part.output)}
             </Section>
           )}
         </div>

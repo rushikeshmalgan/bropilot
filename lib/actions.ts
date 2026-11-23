@@ -28,7 +28,9 @@ import {
   writeMemory,
   type MemoryFile,
 } from "@/lib/memory"
+import { removeBot } from "@/lib/bot-delete"
 import { getRunQueue } from "@/lib/providers"
+import { resetSandbox as resetBotSandbox } from "@/lib/sandbox"
 
 type CreateBotInput = {
   name: string
@@ -315,3 +317,50 @@ export async function deleteMemoryFile(
   revalidatePath(`/bot/${botId}/settings`)
   return { ok: true }
 }
+
+// --- A bot's own page: its sandbox and deleting it ---
+
+// Throws away the bot's sandbox and everything in it. The next time the bot
+// uses a sandbox it gets a fresh one.
+export async function resetSandbox(
+  botId: string
+): Promise<{ ok: true } | { error: string }> {
+  const { userId } = await auth()
+  if (!userId) {
+    return { error: "You need to be signed in." }
+  }
+  if (!validId(botId)) {
+    return { error: "That bot doesn't exist." }
+  }
+
+  const result = await resetBotSandbox(userId, botId)
+  if (!result.ok) {
+    return { error: result.error }
+  }
+
+  revalidatePath(`/bot/${botId}/settings`)
+  return { ok: true }
+}
+
+// Deletes a bot, its chats, its memory and its sandbox. This can't be undone.
+export async function deleteBot(
+  botId: string
+): Promise<{ ok: true } | { error: string }> {
+  const { userId } = await auth()
+  if (!userId) {
+    return { error: "You need to be signed in." }
+  }
+  if (!validId(botId)) {
+    return { error: "That bot doesn't exist." }
+  }
+
+  const result = await removeBot(userId, botId)
+  if (!result.ok) {
+    return { error: result.error }
+  }
+
+  // The bot is listed in the sidebar on every page.
+  revalidatePath("/", "layout")
+  return { ok: true }
+}
+

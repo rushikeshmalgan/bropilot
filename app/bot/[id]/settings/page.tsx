@@ -5,6 +5,7 @@ import { AppShell } from "@/components/app-shell"
 import { BotSettings } from "@/components/bot-settings"
 import { getBot } from "@/lib/bots"
 import { MEMORY_LIMITS, listMemory } from "@/lib/memory"
+import { getSandboxStatus } from "@/lib/sandbox"
 
 // A bot's own page. Someone else's bot is a 404, the same as one that doesn't
 // exist.
@@ -16,8 +17,12 @@ export default async function BotSettingsPage({
   const { userId } = await auth.protect()
 
   const { id } = await params
-  const [bot, files] = await Promise.all([getBot(id), listMemory(userId, id)])
-  if (!bot || !files) {
+  const [bot, files, sandbox] = await Promise.all([
+    getBot(id),
+    listMemory(userId, id),
+    getSandboxStatus(userId, id),
+  ])
+  if (!bot || !files || !sandbox) {
     notFound()
   }
 
@@ -34,6 +39,7 @@ export default async function BotSettingsPage({
           maxFiles: MEMORY_LIMITS.maxFiles,
           maxFileChars: MEMORY_LIMITS.maxFileChars,
         }}
+        sandbox={sandbox}
       />
     </AppShell>
   )

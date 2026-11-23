@@ -20,6 +20,7 @@
     "@base-ui/react": "^1.9.0",
     "@clerk/nextjs": "^7.9.14",
     "@clerk/ui": "^1.40.0",
+    "@daytonaio/sdk": "^0.231.1",
     "@neon/config": "^1.9.1",
     "@neon/env": "^1.6.1",
     "@neondatabase/serverless": "^1.2.0",
