@@ -38,8 +38,10 @@ export const RUN_TIMEOUT_MESSAGE =
   "The reply took too long and was stopped. Try again."
 export const CHAT_BUSY_MESSAGE =
   "The bot is still replying. Wait for it to finish, or stop it."
+// Shown to anyone who sends a message, so it names no setting. The log at
+// start-up, /api/health and `npm run check:env` say what is missing.
 export const NOT_CONFIGURED_MESSAGE =
-  "Bot replies aren't set up on this server yet: TRIGGER_SECRET_KEY is missing or isn't a Trigger.dev secret key."
+  "Replies aren't switched on for this app yet. Whoever runs it needs to finish setting it up. Your message wasn't sent."
 export const OUT_OF_STEPS_MESSAGE =
   "I used my tools but ran out of steps before writing an answer. Ask me to continue."
 export const ENQUEUE_FAILED_MESSAGE =

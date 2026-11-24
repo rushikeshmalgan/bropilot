@@ -17,9 +17,13 @@ import {
   MAX_TITLE_LENGTH,
   selectChat,
 } from "@/lib/chat-store"
-import type { RunHandle } from "@/lib/chat-types"
+import {
+  isActiveRunStatus,
+  textOfParts,
+  type RunHandle,
+} from "@/lib/chat-types"
 import { db } from "@/lib/db"
-import { chats, messages, runs } from "@/lib/db/schema"
+import { chats, messages, runs, type Run } from "@/lib/db/schema"
 import { captureError } from "@/lib/observability"
 import {
   READ_ONLY_BOT_MESSAGE,
@@ -83,29 +87,70 @@ export async function liveAccess(
   }
 }
 
-// The caller has already checked who the user is.
+const NOT_RETRYABLE_MESSAGE =
+  "That reply can't be retried. Send your message again."
+
+// The failed reply a retry replaces: the chat's latest message from the user,
+// whose latest run ended in an error. Anything else can't be retried, so a
+// retry can't be used to re-run an old message or someone else's. A message
+// whose latest run is still going is "busy" (someone, perhaps in another tab,
+// has already retried it).
+async function findRetryTarget(chatId: string, userMessageId: string) {
+  const [latest] = await db
+    .select({ id: messages.id, parts: messages.parts })
+    .from(messages)
+    .where(and(eq(messages.chatId, chatId), eq(messages.role, "user")))
+    .orderBy(desc(messages.createdAt))
+    .limit(1)
+  if (!latest || latest.id !== userMessageId) {
+    return null
+  }
+
+  const [failed] = await db
+    .select()
+    .from(runs)
+    .where(and(eq(runs.chatId, chatId), eq(runs.userMessageId, userMessageId)))
+    .orderBy(desc(runs.createdAt))
+    .limit(1)
+  if (failed && isActiveRunStatus(failed.status)) {
+    return "busy" as const
+  }
+  if (!failed || failed.status !== "error") {
+    return null
+  }
+
+  return { text: textOfParts(latest.parts).trim(), failed: failed as Run }
+}
+
+// The caller has already checked who the user is. Either `text` is a new
+// message, or `retryOf` names the user's last message, whose reply failed: then
+// the same message is answered again and the failed reply is replaced.
 export async function startRun({
   userId,
   chatId,
   text: rawText,
+  retryOf,
   plan,
 }: {
   userId: string
   chatId: string
-  text: string
+  text?: string
+  retryOf?: string
   // The user's plan, read from their session by the caller.
   plan: PlanId
 }): Promise<StartRunResult> {
-  const text = rawText.trim()
-  if (!text) {
-    return refuse(400, "empty_message", "Write a message first.")
-  }
-  if (text.length > MAX_MESSAGE_LENGTH) {
-    return refuse(
-      400,
-      "message_too_long",
-      `Messages can be up to ${MAX_MESSAGE_LENGTH} characters.`
-    )
+  let text = (rawText ?? "").trim()
+  if (retryOf === undefined) {
+    if (!text) {
+      return refuse(400, "empty_message", "Write a message first.")
+    }
+    if (text.length > MAX_MESSAGE_LENGTH) {
+      return refuse(
+        400,
+        "message_too_long",
+        `Messages can be up to ${MAX_MESSAGE_LENGTH} characters.`
+      )
+    }
   }
 
   const queue = getRunQueue()
@@ -129,9 +174,24 @@ export async function startRun({
     return refuse(404, "not_found", "That chat doesn't exist.")
   }
 
+  // A retry answers the message again, as the same bot, and replaces the
+  // failed reply.
+  let failedRun: Run | null = null
+  if (retryOf !== undefined) {
+    const target = await findRetryTarget(chatId, retryOf)
+    if (target === "busy") {
+      return refuse(409, "chat_busy", CHAT_BUSY_MESSAGE)
+    }
+    if (!target || !target.text) {
+      return refuse(404, "not_retryable", NOT_RETRYABLE_MESSAGE)
+    }
+    text = target.text
+    failedRun = target.failed
+  }
+
   // Only a group chat needs to know who spoke last.
   const lastSpeaker =
-    chat.bots.length > 1
+    chat.bots.length > 1 && failedRun === null
       ? await db
           .select({ role: messages.role, botId: messages.botId })
           .from(messages)
@@ -145,7 +205,9 @@ export async function startRun({
           .orderBy(desc(messages.createdAt))
           .limit(1)
       : []
-  const bot = pickBot(chat.bots, text, lastSpeaker)
+  const bot =
+    (failedRun && chat.bots.find((member) => member.id === failedRun.botId)) ||
+    pickBot(chat.bots, text, lastSpeaker)
 
   // A plan covers a number of bots. The rest are kept but can't be used.
   if (!(await activeBotIds(userId, plan)).includes(bot.id)) {
@@ -166,7 +228,7 @@ export async function startRun({
   const giveBack = () => releaseRun(userId, reservation.month).catch(() => {})
 
   const runId = nanoid()
-  const userMessageId = nanoid()
+  const userMessageId = retryOf ?? nanoid()
   const assistantMessageId = nanoid()
   // A one-on-one chat is named after its first message.
   const retitle = chat.botId !== null && chat.title === DEFAULT_CHAT_TITLE
@@ -176,26 +238,52 @@ export async function startRun({
   // allows one unfinished run per chat, so a second send at the same moment
   // fails here and saves nothing.
   const save = () =>
-    db.batch([
-      db.insert(messages).values({
-        id: userMessageId,
-        chatId,
-        role: "user",
-        parts: [{ type: "text", text }],
-      }),
-      db.insert(runs).values({
-        id: runId,
-        chatId,
-        botId: bot.id,
-        userMessageId,
-        assistantMessageId,
-        plan,
-      }),
-      db
-        .update(chats)
-        .set({ updatedAt: new Date(), title })
-        .where(and(eq(chats.id, chatId), eq(chats.userId, userId))),
-    ])
+    failedRun
+      ? // A retry saves no new message: the failed reply goes, and a new run
+        // answers the message that is already there.
+        db.batch([
+          db
+            .delete(messages)
+            .where(
+              and(
+                eq(messages.id, failedRun.assistantMessageId),
+                eq(messages.chatId, chatId),
+                eq(messages.status, "error")
+              )
+            ),
+          db.insert(runs).values({
+            id: runId,
+            chatId,
+            botId: bot.id,
+            userMessageId,
+            assistantMessageId,
+            plan,
+          }),
+          db
+            .update(chats)
+            .set({ updatedAt: new Date() })
+            .where(and(eq(chats.id, chatId), eq(chats.userId, userId))),
+        ])
+      : db.batch([
+          db.insert(messages).values({
+            id: userMessageId,
+            chatId,
+            role: "user",
+            parts: [{ type: "text", text }],
+          }),
+          db.insert(runs).values({
+            id: runId,
+            chatId,
+            botId: bot.id,
+            userMessageId,
+            assistantMessageId,
+            plan,
+          }),
+          db
+            .update(chats)
+            .set({ updatedAt: new Date(), title })
+            .where(and(eq(chats.id, chatId), eq(chats.userId, userId))),
+        ])
 
   try {
     await save()

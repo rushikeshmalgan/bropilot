@@ -199,6 +199,34 @@ function ChatViewInner({
     void send(trimmed)
   }
 
+  // Asks the server to start a reply: to a new message, or (with `retryOf`) to
+  // the last message again after a failed reply.
+  async function startReply(
+    payload: { text: string } | { retryOf: string }
+  ): Promise<
+    { run: RunHandle; userMessageId: string } | { error: string }
+  > {
+    try {
+      const response = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: chat.id, ...payload }),
+      })
+      const body = (await response.json().catch(() => null)) as {
+        run?: RunHandle
+        userMessageId?: string
+        error?: string
+      } | null
+
+      if (response.ok && body?.run && body.userMessageId) {
+        return { run: body.run, userMessageId: body.userMessageId }
+      }
+      return { error: body?.error ?? "Something went wrong. Try again." }
+    } catch {
+      return { error: SEND_FAILED }
+    }
+  }
+
   async function send(text: string) {
     setNotice(null)
     setSending(true)
@@ -216,47 +244,47 @@ function ChatViewInner({
       },
     ])
 
-    let refusal: string | null = null
-    try {
-      const response = await fetch("/api/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: chat.id, text }),
-      })
-      const body = (await response.json().catch(() => null)) as {
-        run?: RunHandle
-        userMessageId?: string
-        error?: string
-      } | null
+    const result = await startReply({ text })
 
-      if (response.ok && body?.run && body.userMessageId) {
-        const started = body.run
-        const userMessageId = body.userMessageId
-        setMessages((current) => [
-          ...current.map((message) =>
-            message.id === pendingId
-              ? { ...message, id: userMessageId }
-              : message
-          ),
-          placeholderReply(started),
-        ])
-        setRun(started)
-        // The sidebar shows the chat's title and time, which just changed.
-        router.refresh()
-      } else {
-        refusal = body?.error ?? "Something went wrong. Try again."
-      }
-    } catch {
-      refusal = SEND_FAILED
-    }
-
-    if (refusal) {
+    if ("error" in result) {
       // The message wasn't saved: take it back out and return the text.
       setMessages((current) =>
         current.filter((message) => message.id !== pendingId)
       )
       restoreText.current(text)
-      setNotice(refusal)
+      setNotice(result.error)
+    } else {
+      const { run: started, userMessageId } = result
+      setMessages((current) => [
+        ...current.map((message) =>
+          message.id === pendingId ? { ...message, id: userMessageId } : message
+        ),
+        placeholderReply(started),
+      ])
+      setRun(started)
+      // The sidebar shows the chat's title and time, which just changed.
+      router.refresh()
+    }
+    setSending(false)
+  }
+
+  // "Try again" on a failed reply: the same message is answered again, and the
+  // failed reply is replaced by the new one.
+  async function retry(userMessageId: string, failedReplyId: string) {
+    setNotice(null)
+    setSending(true)
+
+    const result = await startReply({ retryOf: userMessageId })
+
+    if ("error" in result) {
+      setNotice(result.error)
+    } else {
+      setMessages((current) => [
+        ...current.filter((message) => message.id !== failedReplyId),
+        placeholderReply(result.run),
+      ])
+      setRun(result.run)
+      router.refresh()
     }
     setSending(false)
   }
@@ -411,12 +439,26 @@ function ChatViewInner({
           ) : (
             <Conversation className="min-h-0">
               <ConversationContent className="mx-auto w-full max-w-3xl gap-6 px-6 py-6">
-                {visible.map((message) => {
+                {visible.map((message, index) => {
                   if (message.status === "error") {
+                    // Only the last reply can be tried again, and only right
+                    // after the message it answers.
+                    const asked = visible[index - 1]
+                    const canRetry =
+                      !readOnly &&
+                      !busy &&
+                      index === visible.length - 1 &&
+                      asked?.role === "user"
+
                     return (
                       <ErrorBubble
                         key={message.id}
                         text={textOfParts(message.parts)}
+                        onRetry={
+                          canRetry
+                            ? () => void retry(asked.id, message.id)
+                            : undefined
+                        }
                       />
                     )
                   }
@@ -553,7 +595,18 @@ function ChatViewInner({
       </div>
 
       {bot && workspaceOpen && (
-        <aside className="hidden w-[26rem] shrink-0 flex-col border-l md:flex xl:w-[34rem]">
+        // Beside the chat on a wide screen; over it on a phone, with its own
+        // way to close it.
+        <aside className="flex w-full shrink-0 flex-col border-l max-md:fixed max-md:inset-0 max-md:z-40 max-md:bg-background md:w-[26rem] xl:w-[34rem]">
+          <div className="flex shrink-0 justify-end px-3 pt-2 md:hidden">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setWorkspaceOpen(false)}
+            >
+              Back to the chat
+            </Button>
+          </div>
           <ScreenViewer
             botId={bot.id}
             botName={bot.name}
@@ -590,8 +643,15 @@ function ChatViewInner({
   )
 }
 
-// A reply that failed, shown in the thread so it's never a silent failure.
-function ErrorBubble({ text }: { text: string }) {
+// A reply that failed, shown in the thread so it's never a silent failure. With
+// `onRetry` it has one next action: answer the message again.
+function ErrorBubble({
+  text,
+  onRetry,
+}: {
+  text: string
+  onRetry?: () => void
+}) {
   return (
     <Message from="assistant" className="max-w-[80%]">
       <MessageContent
@@ -599,6 +659,16 @@ function ErrorBubble({ text }: { text: string }) {
         className="group-[.is-assistant]:w-fit group-[.is-assistant]:rounded-2xl group-[.is-assistant]:bg-destructive/10 group-[.is-assistant]:px-3 group-[.is-assistant]:py-2 group-[.is-assistant]:text-destructive"
       >
         {text}
+        {onRetry && (
+          <Button
+            variant="outline"
+            size="sm"
+            className="mt-2 block"
+            onClick={onRetry}
+          >
+            Try again
+          </Button>
+        )}
       </MessageContent>
     </Message>
   )

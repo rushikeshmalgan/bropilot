@@ -32,17 +32,28 @@ export async function POST(request: Request) {
     return fail(400, "bad_request", "That request wasn't valid.")
   }
 
-  // Only the chat's ID and the new text are accepted. Everything else the
+  // Only the chat's ID and either the new text or the ID of the last message
+  // to answer again (after a failed reply) are accepted. Everything else the
   // reply needs is loaded from the database, so it can't be forged.
-  const { id, text } = (body ?? {}) as { id?: unknown; text?: unknown }
-  if (typeof id !== "string" || !id || id.length > 64 || typeof text !== "string") {
+  const { id, text, retryOf } = (body ?? {}) as {
+    id?: unknown
+    text?: unknown
+    retryOf?: unknown
+  }
+  const validId = (value: unknown): value is string =>
+    typeof value === "string" && value.length > 0 && value.length <= 64
+  const retrying = retryOf !== undefined
+  if (
+    !validId(id) ||
+    (retrying ? !validId(retryOf) : typeof text !== "string")
+  ) {
     return fail(400, "bad_request", "That request wasn't valid.")
   }
 
   const result = await startRun({
     userId,
     chatId: id,
-    text,
+    ...(retrying ? { retryOf: retryOf as string } : { text: text as string }),
     // Read from the session here, because the background worker has none.
     plan: await getPlan(userId),
   })

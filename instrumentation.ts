@@ -7,6 +7,15 @@
 import type { Instrumentation } from "next"
 
 export async function register() {
+  // Say once, when the server starts, what is missing. Names only, and it never
+  // stops the server: an optional feature that is off is not an error.
+  if (process.env.NEXT_RUNTIME === "nodejs") {
+    const { describeEnvironment } = await import("@/lib/env")
+    for (const line of describeEnvironment("web")) {
+      console.warn(`[bro-pilot] ${line}`)
+    }
+  }
+
   if (!process.env.SENTRY_DSN) {
     return
   }

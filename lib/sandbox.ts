@@ -43,7 +43,7 @@ export const SANDBOX_CLAIM_STALE_MS = 3 * 60_000
 const PENDING_PREFIX = "pending:"
 
 export const SANDBOX_NOT_CONFIGURED_MESSAGE =
-  "Sandboxes aren't set up on this server yet (DAYTONA_API_KEY is missing)."
+  "Sandboxes aren't switched on for this app yet. Whoever runs it needs to finish setting them up."
 
 export type SandboxFailure = {
   ok: false

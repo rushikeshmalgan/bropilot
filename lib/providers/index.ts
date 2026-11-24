@@ -1,6 +1,7 @@
 // Where the app gets its outside services from. Each one is used only when its
 // environment variable holds a usable value; otherwise the getter returns null
 // and the feature shows a "not configured" state instead of failing.
+import { isUsableSecret } from "@/lib/env"
 import { daytonaProvider } from "@/lib/providers/daytona"
 import { firecrawlProvider, type WebProvider } from "@/lib/providers/firecrawl"
 import { triggerRunQueue, type RunQueue } from "@/lib/providers/run-queue"
@@ -24,12 +25,11 @@ export function resetProviderOverrides() {
   overrides = {}
 }
 
-// A secret as it would be sent in a header: printable ASCII with no spaces.
-// A value copied from a masked display ("tr_dev_ab••••") isn't one, and using
-// it would only fail later with a confusing error, so it counts as not set.
+// The value of a secret variable, or null if it is unset or isn't usable as a
+// secret (see isUsableSecret).
 export function usableSecret(name: string): string | null {
   const value = process.env[name]?.trim()
-  return value && /^[\x21-\x7e]+$/.test(value) ? value : null
+  return isUsableSecret(value) ? value : null
 }
 
 // Trigger.dev secret keys start with tr_dev_, tr_prod_ and so on. A personal

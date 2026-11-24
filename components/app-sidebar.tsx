@@ -154,6 +154,11 @@ export function AppSidebar() {
       <SidebarContent>
         <SidebarGroup className="px-2 pt-4">
           <SidebarMenu className="gap-1.5">
+            {bots.length === 0 && groups.length === 0 && (
+              <li className="px-3 py-2 text-xs text-muted-foreground group-data-[collapsible=icon]:hidden">
+                No bots yet. Use the + button above to create your first one.
+              </li>
+            )}
             {bots.map((bot) => (
               <SidebarMenuItem key={bot.id}>
                 <SidebarMenuButton
