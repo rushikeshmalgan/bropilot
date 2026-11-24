@@ -46,6 +46,12 @@ import {
 } from "@/lib/db/schema"
 import { MEMORY_INDEX_PATH, memoryIndexForPrompt } from "@/lib/memory"
 import type { HostLookup } from "@/lib/net/url-safety"
+import {
+  captureError,
+  tagTelemetry,
+  withSpan,
+  withTelemetryScope,
+} from "@/lib/observability"
 import { isPlanId } from "@/lib/plans"
 import { newMeter, recordRunUsage, type RunMeter } from "@/lib/usage"
 
@@ -283,24 +289,47 @@ export async function executeRun(
   runId: string,
   deps: ExecuteRunDeps = {}
 ): Promise<ExecuteRunResult> {
-  const meter = newMeter()
-  const result = await runOnce(runId, deps, meter)
+  // Each run has its own tags and trace, even when one process handles several.
+  return withTelemetryScope(() =>
+    withSpan(
+      { name: "run", op: "run", attributes: { "run.id": String(runId) } },
+      async (span) => {
+        await tagTelemetry({ runId })
+        const meter = newMeter()
 
-  // Add the reply's tokens and sandbox time to the month's usage. It does
-  // nothing for a run that isn't finished, and counts a finished one only once
-  // however many times this is called.
-  if (result.status !== "missing") {
-    try {
-      await recordRunUsage(runId, meter)
-    } catch (error) {
-      console.error(
-        "Couldn't record a run's usage:",
-        error instanceof Error ? error.name : "unknown error"
-      )
-    }
-  }
+        let result: ExecuteRunResult
+        try {
+          result = await runOnce(runId, deps, meter)
+        } catch (error) {
+          // The task will be retried or fail; either way it is worth knowing.
+          span.fail("run crashed")
+          await captureError(error)
+          throw error
+        }
 
-  return result
+        if (result.status === "error") {
+          span.fail("run failed")
+        }
+
+        // Add the reply's tokens and sandbox time to the month's usage. It does
+        // nothing for a run that isn't finished, and counts a finished one only
+        // once however many times this is called.
+        if (result.status !== "missing") {
+          try {
+            await recordRunUsage(runId, meter)
+          } catch (error) {
+            console.error(
+              "Couldn't record a run's usage:",
+              error instanceof Error ? error.name : "unknown error"
+            )
+            await captureError(error)
+          }
+        }
+
+        return result
+      }
+    )
+  )
 }
 
 async function runOnce(
@@ -334,6 +363,8 @@ async function runOnce(
     return { status: existing?.status ?? "missing" }
   }
 
+  await tagTelemetry({ botId: run.botId, chatId: run.chatId })
+
   const deadline = (run.startedAt ?? new Date()).getTime() + maxDurationMs
   let seq = 0
   const publish = (parts: MessagePart[]) => {
@@ -362,6 +393,7 @@ async function runOnce(
   if (!context) {
     return fail(GENERIC_ERROR_MESSAGE)
   }
+  await tagTelemetry({ userId: context.chat.userId })
 
   if (!(await openAssistantMessage(run))) {
     return currentStatus()
@@ -506,7 +538,18 @@ async function runOnce(
 
   for (;;) {
     attempts++
-    const attempt = await attemptOnce()
+    // One span for each call to the model, tool calls included: they happen
+    // while the reply streams in, so they appear inside it.
+    const attempt = await withSpan(
+      { name: "model call", op: "model", attributes: { attempt: attempts } },
+      async (span) => {
+        const outcome = await attemptOnce()
+        if (outcome.kind === "error" || outcome.kind === "timeout") {
+          span.fail(outcome.kind)
+        }
+        return outcome
+      }
+    )
 
     if (attempt.kind === "stopped") {
       return currentStatus()
@@ -520,6 +563,7 @@ async function runOnce(
       if (!textOfParts(attempt.parts).trim()) {
         if (!attempt.parts.some((part) => part.type === "tool")) {
           console.error(`Run ${run.id}: the model returned an empty reply`)
+          await captureError(new Error("The model returned an empty reply"))
           return fail(GENERIC_ERROR_MESSAGE)
         }
         // It called tools until the step limit and never got to answer. Keep
@@ -572,6 +616,8 @@ async function runOnce(
     }
 
     if (delay === null) {
+      // No more tries: this is the reply failing for good.
+      await captureError(attempt.error)
       return fail(
         kind === "rate_limit" ? BUSY_MESSAGE : describeModelError(attempt.error)
       )

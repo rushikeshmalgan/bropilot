@@ -19,6 +19,7 @@ import { nanoid } from "nanoid"
 
 import { db } from "@/lib/db"
 import { bots } from "@/lib/db/schema"
+import { captureError, withSpan } from "@/lib/observability"
 import { planLimits, sandboxRefusal, type PlanId } from "@/lib/plans"
 import { getSandboxProvider } from "@/lib/providers"
 import {
@@ -237,8 +238,27 @@ export async function getOrCreateSandbox(
   }
 }
 
-// Step 2 and 3, for the caller that holds the claim.
-async function createClaimed(
+// Step 2 and 3, for the caller that holds the claim. Timed as one span, so a
+// slow or failing sandbox creation is visible in the reply's trace.
+function createClaimed(
+  provider: SandboxProvider,
+  userId: string,
+  botId: string,
+  claim: string
+): Promise<SandboxLookup> {
+  return withSpan(
+    { name: "sandbox create", op: "sandbox", attributes: { "bot.id": botId } },
+    async (span) => {
+      const result = await createAndRecord(provider, userId, botId, claim)
+      if (!result.ok) {
+        span.fail(result.code)
+      }
+      return result
+    }
+  )
+}
+
+async function createAndRecord(
   provider: SandboxProvider,
   userId: string,
   botId: string,
@@ -277,6 +297,11 @@ async function createClaimed(
     }
     // Let the next caller try instead of waiting out a dead claim.
     await swap(userId, botId, claim, null).catch(() => {})
+    // Our own messages (such as "would run as an administrator") are expected;
+    // anything else is not.
+    if (!(error instanceof SandboxProviderError)) {
+      await captureError(error, { userId, botId })
+    }
     return fail("failed", describe(error, "Couldn't create the sandbox."))
   }
 }

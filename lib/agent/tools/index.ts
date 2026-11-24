@@ -3,6 +3,7 @@
 import type { ToolSet } from "ai"
 
 import { computerTools } from "@/lib/agent/tools/computer"
+import { instrumentTools } from "@/lib/agent/tools/instrument"
 import { memoryTools } from "@/lib/agent/tools/memory"
 import { sandboxTools } from "@/lib/agent/tools/sandbox"
 import type { ToolContext } from "@/lib/agent/tools/shared"
@@ -33,12 +34,13 @@ export function buildTools(context: ToolContext): {
   const screen = limits.computerUse ? sandbox : null
 
   return {
-    tools: {
+    // Each tool call gets a span when Sentry is on; otherwise they are as built.
+    tools: instrumentTools({
       ...memoryTools(context),
       ...(web ? webTools(web, context) : {}),
       ...(sandbox ? sandboxTools(context, sandbox) : {}),
       ...(screen ? computerTools(context, screen) : {}),
-    },
+    }),
     capabilities: {
       web: web !== null,
       memory: true,

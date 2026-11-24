@@ -20,6 +20,7 @@ import {
 import type { RunHandle } from "@/lib/chat-types"
 import { db } from "@/lib/db"
 import { chats, messages, runs } from "@/lib/db/schema"
+import { captureError } from "@/lib/observability"
 import {
   READ_ONLY_BOT_MESSAGE,
   runLimitRefusal,
@@ -241,6 +242,7 @@ export async function startRun({
       `Couldn't queue run ${runId}:`,
       error instanceof Error ? error.message : error
     )
+    await captureError(error, { userId, chatId, botId: bot.id, runId })
     await failRun(
       { id: runId, chatId, botId: bot.id, assistantMessageId },
       ENQUEUE_FAILED_MESSAGE,
