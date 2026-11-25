@@ -11,6 +11,10 @@ export const maxDuration = 60
 export const SCREEN_URL_LIMIT = 20
 const SCREEN_URL_WINDOW_MS = 60_000
 
+// Where-it-stands checks a user may make per minute. The viewer asks every
+// five seconds, and each one costs calls to the sandbox service.
+const SCREEN_READ_LIMIT = 120
+
 const NO_STORE = { "Cache-Control": "no-store" }
 
 function reply(body: unknown, status = 200, headers: HeadersInit = {}) {
@@ -58,6 +62,15 @@ export async function GET(
   const owner = await ownerOf(params)
   if (owner.response) {
     return owner.response
+  }
+
+  const limit = checkLimit("screen-read", owner.userId, SCREEN_READ_LIMIT, 60_000)
+  if (!limit.ok) {
+    return reply(
+      { error: "That's too many screen requests. Try again in a minute.", code: "rate_limited" },
+      429,
+      { "Retry-After": String(limit.retryAfterSeconds) }
+    )
   }
 
   const status = await getDesktopStatus(owner.userId, owner.botId, {

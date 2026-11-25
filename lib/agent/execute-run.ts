@@ -30,6 +30,7 @@ import {
   isToolFailure,
 } from "@/lib/agent/tools/shared"
 import { textOfParts, type RunProgress } from "@/lib/chat-types"
+import { cleanDeep, cleanText, safeSlice } from "@/lib/text"
 import { db } from "@/lib/db"
 import {
   botMemoryFiles,
@@ -53,7 +54,8 @@ import {
   withTelemetryScope,
 } from "@/lib/observability"
 import { isPlanId } from "@/lib/plans"
-import { newMeter, recordRunUsage, type RunMeter } from "@/lib/usage"
+import { monthKey } from "@/lib/plans"
+import { addTokens, newMeter, recordRunUsage, type RunMeter } from "@/lib/usage"
 
 export type ExecuteRunDeps = {
   model?: LanguageModel
@@ -61,6 +63,8 @@ export type ExecuteRunDeps = {
   retryBaseMs?: number
   progressIntervalMs?: number
   maxDurationMs?: number
+  // The most tokens a reply may use (default: MAX_RUN_TOKENS).
+  maxRunTokens?: number
   // Resolves host names for the URL safety check in web tools.
   hostLookup?: HostLookup
   // Called with the reply so far each time it is saved, and once at the end.
@@ -121,11 +125,11 @@ function forStorage(output: unknown): unknown {
   }
 
   if (serialized.length <= MAX_TOOL_OUTPUT_CHARS * 2) {
-    return output
+    return cleanDeep(output)
   }
   return {
     truncated: true,
-    preview: serialized.slice(0, MAX_TOOL_OUTPUT_CHARS),
+    preview: cleanText(safeSlice(serialized, MAX_TOOL_OUTPUT_CHARS)),
   }
 }
 
@@ -184,8 +188,12 @@ class ReplyBuilder {
     )
   }
 
+  // What is saved and shown. Text from the model and from tools can hold
+  // characters that can't be stored (NUL, half of an emoji): one of them would
+  // make the whole reply impossible to save, so they are cleaned here, where
+  // every save and every live update passes.
   snapshot(): MessagePart[] {
-    return this.parts.map((part) => ({ ...part }))
+    return cleanDeep(this.parts.map((part) => ({ ...part }))) as MessagePart[]
   }
 }
 
@@ -296,15 +304,19 @@ export async function executeRun(
       async (span) => {
         await tagTelemetry({ runId })
         const meter = newMeter()
+        // Writes of tokens to the month's usage, one per model step, in flight.
+        const tokenWrites: Promise<unknown>[] = []
 
         let result: ExecuteRunResult
         try {
-          result = await runOnce(runId, deps, meter)
+          result = await runOnce(runId, deps, meter, tokenWrites)
         } catch (error) {
           // The task will be retried or fail; either way it is worth knowing.
           span.fail("run crashed")
           await captureError(error)
           throw error
+        } finally {
+          await Promise.allSettled(tokenWrites)
         }
 
         if (result.status === "error") {
@@ -316,7 +328,14 @@ export async function executeRun(
         // once however many times this is called.
         if (result.status !== "missing") {
           try {
-            await recordRunUsage(runId, meter)
+            // The tokens are already in the month's usage (they were added as
+            // each step ended); this adds the sandbox time, and marks the run as
+            // counted so none of it is added twice.
+            await recordRunUsage(runId, {
+              ...meter,
+              inputTokens: 0,
+              outputTokens: 0,
+            })
           } catch (error) {
             console.error(
               "Couldn't record a run's usage:",
@@ -335,7 +354,8 @@ export async function executeRun(
 async function runOnce(
   runId: string,
   deps: ExecuteRunDeps,
-  meter: RunMeter
+  meter: RunMeter,
+  tokenWrites: Promise<unknown>[]
 ): Promise<ExecuteRunResult> {
   if (typeof runId !== "string" || !runId) {
     return { status: "missing" }
@@ -475,6 +495,27 @@ async function runOnce(
         capabilities,
         memoryIndex: context.memoryIndex,
         abortSignal: controller.signal,
+        // Every step's tokens are counted as it ends, whatever becomes of the
+        // reply: a reply that is stopped or fails after reading pages has
+        // still used them.
+        onStepUsage: (usage) => {
+          meter.inputTokens += usage.inputTokens ?? 0
+          meter.outputTokens += usage.outputTokens ?? 0
+          tokenWrites.push(
+            addTokens(
+              context.chat.userId,
+              monthKey(run.createdAt),
+              usage.inputTokens ?? 0,
+              usage.outputTokens ?? 0
+            ).catch((error) => {
+              console.error(
+                "Couldn't count a step's tokens:",
+                error instanceof Error ? error.name : "unknown error"
+              )
+            })
+          )
+        },
+        maxRunTokens: deps.maxRunTokens,
       })
 
       for await (const part of result.fullStream) {
@@ -571,26 +612,27 @@ async function runOnce(
         attempt.parts.push({ type: "text", text: OUT_OF_STEPS_MESSAGE })
       }
 
-      meter.inputTokens += attempt.usage?.inputTokens ?? 0
-      meter.outputTokens += attempt.usage?.outputTokens ?? 0
-
-      // The run and its message finish together, and only if the run is still
-      // running: a Stop that got there first wins and this changes nothing.
-      const finished = sql`exists (select 1 from runs r where r.id = ${run.id} and r.status = 'done')`
-      await db.batch([
-        db
-          .update(runs)
-          .set({ status: "done", finishedAt: new Date() })
-          .where(and(eq(runs.id, run.id), eq(runs.status, "running"))),
-        db
-          .update(messages)
-          .set({ parts: attempt.parts, usage: attempt.usage, status: "done" })
-          .where(and(eq(messages.id, run.assistantMessageId), finished)),
-        db
-          .update(chats)
-          .set({ updatedAt: new Date() })
-          .where(and(eq(chats.id, run.chatId), finished)),
-      ])
+      // The run and its message finish together, in one statement, and only
+      // if THIS worker is the one that moves the run from running to done: a
+      // Stop that got there first wins, and so does a worker that finished the
+      // run before this one (a leftover from an attempt that was given up on).
+      // Either way this changes nothing.
+      await db.execute(sql`
+        with done as (
+          update runs set status = 'done', finished_at = now()
+          where id = ${run.id} and status = 'running'
+          returning id
+        ), saved as (
+          update messages
+          set parts = ${JSON.stringify(attempt.parts)}::jsonb,
+              usage = ${attempt.usage ? JSON.stringify(attempt.usage) : null}::jsonb,
+              status = 'done'
+          where id = ${run.assistantMessageId} and exists (select 1 from done)
+          returning id
+        )
+        update chats set updated_at = now()
+        where id = ${run.chatId} and exists (select 1 from done)
+      `)
 
       publish(attempt.parts)
       return currentStatus()

@@ -1,4 +1,4 @@
-import { asc, eq } from "drizzle-orm"
+import { asc, eq, sql } from "drizzle-orm"
 
 import { startRun } from "@/lib/agent/start-run"
 import { insertChat } from "@/lib/chat-store"
@@ -50,6 +50,16 @@ export async function readChat(chatId: string) {
     // The text of the only reply, for the common case of one.
     replyText: replies.length === 1 ? textOfParts(replies[0].parts) : null,
   }
+}
+
+// Ends every unfinished run a user has, for tests that leave replies queued
+// and then keep using the same user (a user may only have a few at once).
+export async function finishActiveRuns(userId: string) {
+  await db.execute(sql`
+    update runs set status = 'done', finished_at = now()
+    where status in ('queued', 'running')
+      and chat_id in (select id from chats where user_id = ${userId})
+  `)
 }
 
 export function wait(ms: number) {

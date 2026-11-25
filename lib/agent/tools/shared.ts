@@ -2,12 +2,19 @@
 // model, and the shape of a failure.
 import type { HostLookup } from "@/lib/net/url-safety"
 import type { PlanId } from "@/lib/plans"
+import { cleanText, safeSlice } from "@/lib/text"
 import type { RunMeter } from "@/lib/usage"
 
 // The hard cap on text one tool call returns to the model (and saves with the
 // message). Longer output is cut off and marked as cut.
 export const MAX_TOOL_OUTPUT_CHARS = 8000
 export const MAX_SEARCH_RESULTS = 5
+// Searches and page reads one reply may make in total. The model can ask for
+// many at once, and each one costs money and puts up to 8000 characters in
+// front of the model at every step after it.
+export const MAX_WEB_CALLS_PER_RUN = 12
+export const WEB_LIMIT_MESSAGE =
+  "This reply has used all of its web lookups. Say what you found so far, and carry on in the next message."
 
 // Attached to anything that came from outside, as a reminder at the point
 // where the model reads it. The system prompt states the rule in full.
@@ -41,11 +48,14 @@ export function toolFailure(error: unknown, fallback: string): ToolFailure {
   return { error: clip(safe, 300).text }
 }
 
+// Cuts text to `max` characters. The result can always be saved: NUL
+// characters are removed and a cut never leaves half of an emoji.
 export function clip(text: string, max: number) {
-  if (text.length <= max) {
-    return { text, truncated: false }
+  const clean = cleanText(text)
+  if (clean.length <= max) {
+    return { text: clean, truncated: false }
   }
-  return { text: text.slice(0, max), truncated: true }
+  return { text: safeSlice(clean, max), truncated: true }
 }
 
 // True for the { error } shape tools return when they fail.

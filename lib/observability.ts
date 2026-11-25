@@ -64,7 +64,7 @@ export async function initWorkerTelemetry() {
 }
 
 // Only short, plain values we chose ourselves are sent as span attributes.
-const SAFE_ATTRIBUTE = /^[\w .:@/-]{0,64}$/
+const SAFE_ATTRIBUTE = /^[\w .:/-]{0,64}$/
 
 function cleanAttributes(attributes: Record<string, string | number | boolean>) {
   const out: Record<string, string | number | boolean> = {}

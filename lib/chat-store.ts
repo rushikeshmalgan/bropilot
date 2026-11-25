@@ -1,7 +1,7 @@
 // Queries for chats and messages. Every function takes the owner's user ID and
 // scopes by it, so a chat that belongs to someone else behaves as if it doesn't
 // exist. The Clerk-aware wrappers live in lib/chats.ts and lib/actions.ts.
-import { and, desc, eq, inArray, isNull } from "drizzle-orm"
+import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm"
 import { nanoid } from "nanoid"
 
 import { db } from "@/lib/db"
@@ -18,6 +18,20 @@ export { MAX_GROUP_BOTS, MAX_MESSAGE_LENGTH, MAX_TITLE_LENGTH }
 // Only the most recent messages are loaded; paging can come later.
 const MESSAGE_LIMIT = 500
 
+// Chats one user may have, and how many are listed at once. The sidebar loads
+// the lists on every page, so they are bounded.
+export const MAX_CHATS_PER_USER = 500
+const CHAT_LIST_LIMIT = 300
+const GROUP_LIST_LIMIT = 100
+
+export async function countChats(userId: string) {
+  const [row] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(chats)
+    .where(eq(chats.userId, userId))
+  return row?.count ?? 0
+}
+
 export async function selectChats(userId: string, botId?: string) {
   return db
     .select()
@@ -26,6 +40,7 @@ export async function selectChats(userId: string, botId?: string) {
       and(eq(chats.userId, userId), botId ? eq(chats.botId, botId) : undefined)
     )
     .orderBy(desc(chats.updatedAt))
+    .limit(CHAT_LIST_LIMIT)
 }
 
 export async function selectGroupChats(userId: string) {
@@ -34,6 +49,7 @@ export async function selectGroupChats(userId: string) {
     .from(chats)
     .where(and(eq(chats.userId, userId), isNull(chats.botId)))
     .orderBy(desc(chats.updatedAt))
+    .limit(GROUP_LIST_LIMIT)
 
   return withParticipants(groups)
 }

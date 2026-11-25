@@ -40,6 +40,9 @@ type Options = {
   createDelayMs?: number
   // create() throws this many times before it works.
   failCreates?: number
+  // A failed create() has still made a sandbox at the provider, like a create
+  // that timed out after the service had started it.
+  leakOnFailedCreate?: boolean
   // Commands run as an administrator (id -u prints 0).
   rootUser?: boolean
   // delete() fails for these IDs, like the service being down.
@@ -169,6 +172,17 @@ export function fakeSandbox(options: Options = {}) {
       }
       if (failCreates > 0) {
         failCreates--
+        if (options.leakOnFailedCreate) {
+          const id = `box_${++counter}`
+          boxes.set(id, {
+            id,
+            botId: input.botId,
+            state: "running",
+            files: new Map(),
+            startCount: 0,
+            desktop: "stopped",
+          })
+        }
         throw new SandboxProviderError("Couldn't create the sandbox.")
       }
 

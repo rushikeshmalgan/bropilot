@@ -43,7 +43,17 @@ export const CHAT_BUSY_MESSAGE =
 export const NOT_CONFIGURED_MESSAGE =
   "Replies aren't switched on for this app yet. Whoever runs it needs to finish setting it up. Your message wasn't sent."
 export const OUT_OF_STEPS_MESSAGE =
-  "I used my tools but ran out of steps before writing an answer. Ask me to continue."
+  "I used my tools but ran out of room before writing an answer. Ask me to continue."
+// The most model tokens (what it read plus what it wrote, over all its steps)
+// one reply may use. Every step sends the whole conversation again, with
+// everything the tools returned, so cost grows with each step; this is the
+// cap on a reply that keeps reading pages.
+export const MAX_RUN_TOKENS = 200_000
+// Replies one user may have being written at the same moment, in all their
+// chats. The monthly allowance is checked when a reply starts, so without this
+// a user could start many replies before any of them is counted.
+export const MAX_ACTIVE_RUNS_PER_USER = 3
+export const TOO_MANY_REPLIES_MESSAGE = `You already have ${MAX_ACTIVE_RUNS_PER_USER} replies being written. Wait for one to finish, or stop one, and try again.`
 export const ENQUEUE_FAILED_MESSAGE =
   "Couldn't start the reply. Try again in a moment."
 

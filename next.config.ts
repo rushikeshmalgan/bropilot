@@ -20,6 +20,10 @@ if (process.argv.includes("build")) {
 const nextConfig: NextConfig = {
   experimental: {
     agentUpgrade: "security",
+    // The proxy (proxy.ts) buffers the body of every request it runs on, up to
+    // this size, before the route sees it. The default is 10 MB; the largest
+    // thing this app receives is a memory file (a few tens of kilobytes).
+    proxyClientMaxBodySize: "256kb",
   },
   // Don't tell every visitor which framework this is.
   poweredByHeader: false,

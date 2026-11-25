@@ -207,11 +207,18 @@ export async function getOrCreateSandbox(
         continue
       }
 
-      // Someone's creating it. Wait for them, or clear a dead claim.
+      // Someone's creating it. Wait for them, or take over from a dead one.
       if (recorded) {
         if (claimAge(recorded, now()) > staleMs) {
-          await removeOrphans(provider, botId)
-          await swap(userId, botId, recorded, null)
+          // Take the dead creator's place with a claim of our own FIRST. Only
+          // then is it safe to remove what it left behind: while we hold the
+          // claim nobody else can be creating or recording a sandbox, so
+          // whatever the provider lists for this bot is an orphan.
+          const takeover = `${PENDING_PREFIX}${now()}:${nanoid(8)}`
+          if (await swap(userId, botId, recorded, takeover)) {
+            await removeOrphans(provider, botId)
+            return await createClaimed(provider, userId, botId, takeover)
+          }
           continue
         }
 
@@ -294,6 +301,11 @@ async function createAndRecord(
   } catch (error) {
     if (createdId) {
       await provider.delete(createdId).catch(() => {})
+    } else {
+      // A create that timed out may still have made a sandbox at the provider,
+      // one we were never told the ID of. We hold the claim, so any sandbox
+      // labelled with this bot is that one.
+      await removeOrphans(provider, botId)
     }
     // Let the next caller try instead of waiting out a dead claim.
     await swap(userId, botId, claim, null).catch(() => {})
@@ -444,11 +456,19 @@ export async function resetSandbox(
         "The sandbox is being set up right now. Try again in a moment."
       )
     }
-    // A dead creator's claim: clear it, and anything it left behind.
+    // A dead creator's claim: take it over, clear what it left behind (while
+    // we hold the claim, nobody else can be making a sandbox), then release it.
+    const takeover = `${PENDING_PREFIX}${now()}:${nanoid(8)}`
+    if (!(await swap(userId, botId, bot.sandboxId, takeover))) {
+      return fail(
+        "busy",
+        "The sandbox is being set up right now. Try again in a moment."
+      )
+    }
     if (provider) {
       await removeOrphans(provider, botId)
     }
-    await swap(userId, botId, bot.sandboxId, null)
+    await swap(userId, botId, takeover, null)
     return { ok: true }
   }
 

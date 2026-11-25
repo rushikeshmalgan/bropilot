@@ -20,6 +20,12 @@ import { getRunQueue } from "@/lib/providers"
 // stuck. The margin covers the time a worker needs to save its last write.
 const STALE_GRACE_MS = 15_000
 
+// Whether an unfinished run has outlived the time a run may take.
+export function isStaleRun(run: Pick<Run, "startedAt" | "createdAt">) {
+  const began = (run.startedAt ?? run.createdAt).getTime()
+  return Date.now() - began > MAX_RUN_DURATION_MS + STALE_GRACE_MS
+}
+
 function toChatMessage(row: typeof messages.$inferSelect): ChatMessage {
   return {
     id: row.id,
@@ -137,23 +143,41 @@ export async function sweepChat(chatId: string) {
 
 // Marks an unfinished run as failed and leaves an error message in the chat.
 // Does nothing if the run already finished or was stopped.
+//
+// One statement: the error message is written only if THIS call is the one that
+// changed the run. A worker that was given up on (swept as stuck) and fails
+// later can't bring back an error message the user has since replaced by
+// retrying.
 export async function failRun(
   run: Pick<Run, "id" | "chatId" | "botId" | "assistantMessageId">,
   message: string,
   from: RunStatus[] = ["running"]
 ) {
-  await db.batch([
-    db
-      .update(runs)
-      .set({ status: "error", error: message, finishedAt: new Date() })
-      .where(and(eq(runs.id, run.id), inArray(runs.status, from))),
-    db.execute(sql`
-      insert into messages (id, chat_id, role, bot_id, parts, status)
-      select ${run.assistantMessageId}, ${run.chatId}, 'assistant', ${run.botId}, ${errorParts(message)}::jsonb, 'error'
-      where exists (select 1 from runs where id = ${run.id} and status = 'error')
-      on conflict (id) do update set parts = excluded.parts, status = 'error'
-    `),
-  ])
+  const statuses = sql.join(
+    from.map((status) => sql`${status}`),
+    sql`, `
+  )
+
+  await db.execute(sql`
+    with failed as (
+      update runs
+      set status = 'error', error = ${message}, finished_at = now()
+      where id = ${run.id} and status in (${statuses})
+      returning id
+    )
+    insert into messages (id, chat_id, role, bot_id, parts, status)
+    select ${run.assistantMessageId}, ${run.chatId}, 'assistant', ${run.botId}, ${errorParts(message)}::jsonb, 'error'
+    where exists (select 1 from failed)
+    on conflict (id) do update set parts = excluded.parts, status = 'error'
+  `)
+}
+
+// failRun for a run known only by its ID. Used when a worker gives up on it.
+export async function failRunById(runId: string, message: string) {
+  const [run] = await db.select().from(runs).where(eq(runs.id, runId)).limit(1)
+  if (run) {
+    await failRun(run, message, ["queued", "running"])
+  }
 }
 
 // The statements that stop one run: the run becomes "cancelled" only if it was

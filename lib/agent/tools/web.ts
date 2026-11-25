@@ -6,7 +6,9 @@ import { z } from "zod"
 import {
   MAX_SEARCH_RESULTS,
   MAX_TOOL_OUTPUT_CHARS,
+  MAX_WEB_CALLS_PER_RUN,
   UNTRUSTED_NOTE,
+  WEB_LIMIT_MESSAGE,
   clip,
   toolFailure,
   type ToolContext,
@@ -15,6 +17,20 @@ import { MAX_URL_LENGTH, checkPublicUrl } from "@/lib/net/url-safety"
 import type { WebProvider } from "@/lib/providers/firecrawl"
 
 export function webTools(web: WebProvider, context: ToolContext) {
+  // Counts one lookup against the reply's limit. The count is taken before
+  // anything is awaited, so lookups started at the same moment are all counted.
+  const overLimit = () => {
+    const meter = context.meter
+    if (!meter) {
+      return false
+    }
+    if (meter.webCalls >= MAX_WEB_CALLS_PER_RUN) {
+      return true
+    }
+    meter.webCalls++
+    return false
+  }
+
   return {
     webSearch: tool({
       description:
@@ -30,6 +46,9 @@ export function webTools(web: WebProvider, context: ToolContext) {
           .describe(`How many results, up to ${MAX_SEARCH_RESULTS}`),
       }),
       execute: async ({ query, limit }) => {
+        if (overLimit()) {
+          return { error: WEB_LIMIT_MESSAGE }
+        }
         try {
           const found = await web.search(query, limit ?? MAX_SEARCH_RESULTS)
           const results = found.slice(0, limit ?? MAX_SEARCH_RESULTS).map((result) => ({
@@ -56,6 +75,9 @@ export function webTools(web: WebProvider, context: ToolContext) {
           .describe("The full URL, starting with http:// or https://"),
       }),
       execute: async ({ url }) => {
+        if (overLimit()) {
+          return { error: WEB_LIMIT_MESSAGE }
+        }
         try {
           // Refuse anything that isn't a public web address before asking for it.
           const requested = await checkPublicUrl(url, context.hostLookup)

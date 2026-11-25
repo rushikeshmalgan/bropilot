@@ -139,22 +139,29 @@ function isPublicIpv6(address: string) {
   ) {
     return isPublicIpv4(embeddedV4())
   }
-  // Unique local (fc00::/7), link-local (fe80::/10), multicast (ff00::/8).
-  if ((groups[0] & 0xfe00) === 0xfc00) {
-    return false
+  // IPv4-translated (::ffff:0:a.b.c.d) carries an IPv4 address too.
+  if (
+    groups.slice(0, 4).every((group) => group === 0) &&
+    groups[4] === 0xffff &&
+    groups[5] === 0
+  ) {
+    return isPublicIpv4(embeddedV4())
   }
-  if ((groups[0] & 0xffc0) === 0xfe80) {
-    return false
+  // 6to4 (2002::/16) puts an IPv4 address right after the prefix.
+  if (groups[0] === 0x2002) {
+    return isPublicIpv4(
+      `${groups[1] >>> 8}.${groups[1] & 0xff}.${groups[2] >>> 8}.${groups[2] & 0xff}`
+    )
   }
-  if ((groups[0] & 0xff00) === 0xff00) {
-    return false
-  }
-  // Documentation (2001:db8::/32).
-  if (groups[0] === 0x2001 && groups[1] === 0xdb8) {
+  // Teredo (2001:0::/32) tunnels IPv4; documentation (2001:db8::/32).
+  if (groups[0] === 0x2001 && (groups[1] === 0 || groups[1] === 0xdb8)) {
     return false
   }
 
-  return true
+  // Only global unicast (2000::/3) is public. Everything else (unique local,
+  // link-local, site-local, multicast, discard, reserved) is not: this list
+  // allows what is known to be public instead of blocking what is known not to be.
+  return (groups[0] & 0xe000) === 0x2000
 }
 
 export function isPublicAddress(address: string) {
@@ -204,6 +211,11 @@ export async function checkPublicUrl(
   }
   if (url.username || url.password) {
     return { ok: false, reason: "URLs with a username or password aren't allowed." }
+  }
+  // The usual web ports only: other ports are where databases, admin panels and
+  // caches listen.
+  if (url.port && url.port !== "80" && url.port !== "443") {
+    return { ok: false, reason: "Only the standard web ports (80 and 443) are allowed." }
   }
 
   // URL already turns odd spellings of an IPv4 address (decimal, hex, octal)

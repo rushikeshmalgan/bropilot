@@ -13,6 +13,7 @@ import {
 } from "@/lib/agent/tools/shared"
 import { getOrCreateSandbox } from "@/lib/sandbox"
 import { getSandboxProvider } from "@/lib/providers"
+import { cleanText, safeSlice } from "@/lib/text"
 import type { SandboxProvider } from "@/lib/providers/sandbox"
 
 export const MAX_COMMAND_CHARS = 4000
@@ -27,7 +28,9 @@ export const MAX_LIST_ENTRIES = 100
 
 // Keeps the start and the end of long output: build logs and test runs say
 // the important thing last.
-export function clipMiddle(text: string, max: number) {
+export function clipMiddle(raw: string, max: number) {
+  // Command output can hold NUL characters, which can't be saved.
+  const text = cleanText(raw)
   if (text.length <= max) {
     return { text, truncated: false }
   }
@@ -36,7 +39,9 @@ export function clipMiddle(text: string, max: number) {
   const head = max - tail
   const cut = text.length - max
   return {
-    text: `${text.slice(0, head)}\n…[${cut} characters cut]…\n${text.slice(text.length - tail)}`,
+    text: cleanText(
+      `${safeSlice(text, head)}\n…[${cut} characters cut]…\n${text.slice(text.length - tail)}`
+    ),
     truncated: true,
   }
 }
@@ -94,6 +99,11 @@ export function sandboxTools(
           .describe(`Stop it after this long. Default ${DEFAULT_COMMAND_SECONDS}`),
       }),
       execute: async ({ command, timeoutSeconds }) => {
+        // The time is taken before anything is awaited, so commands started at
+        // the same moment can't each spend the whole budget. What a command
+        // doesn't use is given back at the end.
+        let limit = 0
+        let used = 0
         try {
           if (secondsLeft <= 0) {
             return {
@@ -102,16 +112,17 @@ export function sandboxTools(
             }
           }
 
-          const ready = await sandbox()
-          if ("error" in ready) {
-            return { error: ready.error }
-          }
-
-          const limit = Math.min(
+          limit = Math.min(
             timeoutSeconds ?? DEFAULT_COMMAND_SECONDS,
             MAX_COMMAND_SECONDS,
             secondsLeft
           )
+          secondsLeft -= limit
+
+          const ready = await sandbox()
+          if ("error" in ready) {
+            return { error: ready.error }
+          }
 
           const started = Date.now()
           // No environment is passed in: nothing from this server's
@@ -119,10 +130,10 @@ export function sandboxTools(
           const result = await ready.provider.exec(ready.id, command, {
             timeoutSeconds: limit,
           })
-          const used = Math.max(1, Math.ceil((Date.now() - started) / 1000))
-          secondsLeft -= used
+          const elapsed = Math.max(1, Math.ceil((Date.now() - started) / 1000))
+          used = Math.min(limit, elapsed)
           if (context.meter) {
-            context.meter.sandboxSeconds += used
+            context.meter.sandboxSeconds += elapsed
           }
 
           const output = clipMiddle(result.output, MAX_TOOL_OUTPUT_CHARS)
@@ -138,6 +149,9 @@ export function sandboxTools(
           }
         } catch (error) {
           return toolFailure(error, "The command couldn't be run.")
+        } finally {
+          // Give back the time that was reserved but not used.
+          secondsLeft += Math.max(0, limit - used)
         }
       },
     }),

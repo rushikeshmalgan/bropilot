@@ -1,7 +1,8 @@
 import { readdirSync, readFileSync, statSync } from "node:fs"
 import path from "node:path"
 
-import { afterEach, describe, expect, it, vi } from "vitest"
+import { sql } from "drizzle-orm"
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest"
 
 import { GET as getHealthRoute } from "@/app/api/health/route"
 import { db } from "@/lib/db"
@@ -167,6 +168,13 @@ describe("checking the environment", () => {
 })
 
 describe("/api/health", () => {
+  // The first query of a test file opens the connection to Neon, which can take
+  // longer than the health check allows when the machine is busy. That is the
+  // check working, not failing, so the connection is opened first.
+  beforeAll(async () => {
+    await db.execute(sql`select 1`)
+  })
+
   afterEach(() => {
     vi.restoreAllMocks()
     resetHealthCache()

@@ -102,10 +102,37 @@ export type RunMeter = {
   outputTokens: number
   // Seconds of sandbox time the run's tools used.
   sandboxSeconds: number
+  // Web searches and page reads the run has made.
+  webCalls: number
 }
 
 export function newMeter(): RunMeter {
-  return { inputTokens: 0, outputTokens: 0, sandboxSeconds: 0 }
+  return { inputTokens: 0, outputTokens: 0, sandboxSeconds: 0, webCalls: 0 }
+}
+
+// Adds tokens a reply has used to its owner's month, as each step ends. They
+// are counted at once, not when the reply is over, so a reply that is stopped,
+// times out, fails, or whose chat is deleted has still been paid for, and a
+// worker that dies half-way leaves its finished steps counted.
+export async function addTokens(
+  userId: string,
+  month: string,
+  inputTokens: number,
+  outputTokens: number
+): Promise<void> {
+  const input = Math.max(0, Math.round(inputTokens))
+  const output = Math.max(0, Math.round(outputTokens))
+  if (input === 0 && output === 0) {
+    return
+  }
+
+  await db.execute(sql`
+    insert into usage (user_id, month, runs, sandbox_minutes, input_tokens, output_tokens)
+    values (${userId}, ${month}, 0, 0, ${input}, ${output})
+    on conflict (user_id, month) do update set
+      input_tokens = usage.input_tokens + excluded.input_tokens,
+      output_tokens = usage.output_tokens + excluded.output_tokens
+  `)
 }
 
 // Adds a finished run's tokens and sandbox time to its owner's month, once.

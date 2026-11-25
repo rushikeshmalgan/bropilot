@@ -1,13 +1,16 @@
 // Accepts a message from the user and starts the bot's reply as a background
 // run. Nothing here talks to the model; that happens in executeRun.
-import { and, desc, eq, isNotNull } from "drizzle-orm"
+import { and, desc, eq, gt, inArray, isNotNull, sql } from "drizzle-orm"
 import { nanoid } from "nanoid"
 
 import {
   CHAT_BUSY_MESSAGE,
   ENQUEUE_FAILED_MESSAGE,
+  MAX_ACTIVE_RUNS_PER_USER,
+  MAX_RUN_DURATION_MS,
   NOT_CONFIGURED_MESSAGE,
   RATE_LIMITED_MESSAGE,
+  TOO_MANY_REPLIES_MESSAGE,
 } from "@/lib/ai"
 import { pickBot } from "@/lib/agent/run-model"
 import { failRun, sweepChat } from "@/lib/agent/run-store"
@@ -34,6 +37,7 @@ import {
 import { getRunQueue } from "@/lib/providers"
 import type { RunQueue } from "@/lib/providers/run-queue"
 import { checkRateLimit } from "@/lib/rate-limit"
+import { cleanText, safeSlice } from "@/lib/text"
 import { activeBotIds, releaseRun, reserveRun } from "@/lib/usage"
 
 export type StartRunResult =
@@ -139,7 +143,8 @@ export async function startRun({
   // The user's plan, read from their session by the caller.
   plan: PlanId
 }): Promise<StartRunResult> {
-  let text = (rawText ?? "").trim()
+  // Without NUL characters, which can't be saved.
+  let text = cleanText(rawText ?? "").trim()
   if (retryOf === undefined) {
     if (!text) {
       return refuse(400, "empty_message", "Write a message first.")
@@ -214,6 +219,29 @@ export async function startRun({
     return refuse(403, "bot_read_only", READ_ONLY_BOT_MESSAGE)
   }
 
+  // Replies being written for this user right now, in every chat. A run that
+  // has outlived the deadline is ignored: it is dead, and is cleared the next
+  // time its chat is opened.
+  const [{ active, here }] = await db
+    .select({
+      active: sql<number>`count(*)::int`,
+      here: sql<number>`(count(*) filter (where ${runs.chatId} = ${chatId}))::int`,
+    })
+    .from(runs)
+    .innerJoin(chats, eq(chats.id, runs.chatId))
+    .where(
+      and(
+        eq(chats.userId, userId),
+        inArray(runs.status, ["queued", "running"]),
+        gt(runs.createdAt, new Date(Date.now() - MAX_RUN_DURATION_MS - 60_000))
+      )
+    )
+  // A chat that is already being answered says so below ("the bot is still
+  // replying"), which is more to the point than the user's overall count.
+  if (here === 0 && active >= MAX_ACTIVE_RUNS_PER_USER) {
+    return refuse(429, "too_many_replies", TOO_MANY_REPLIES_MESSAGE)
+  }
+
   // Take this reply from the month's allowance. The check and the count are
   // one step, so replies started at the same moment can't pass the limit.
   const reservation = await reserveRun(userId, plan)
@@ -232,7 +260,7 @@ export async function startRun({
   const assistantMessageId = nanoid()
   // A one-on-one chat is named after its first message.
   const retitle = chat.botId !== null && chat.title === DEFAULT_CHAT_TITLE
-  const title = retitle ? text.slice(0, MAX_TITLE_LENGTH) : chat.title
+  const title = retitle ? safeSlice(text, MAX_TITLE_LENGTH) : chat.title
 
   // The message and its run are saved together or not at all. The database
   // allows one unfinished run per chat, so a second send at the same moment
@@ -295,7 +323,13 @@ export async function startRun({
 
     // Another run is unfinished. If it's a stuck one, clear it and try once
     // more; if it's really running, the user has to wait or stop it.
-    await sweepChat(chatId)
+    try {
+      await sweepChat(chatId)
+    } catch (error) {
+      // The reply never started, so it isn't taken out of the allowance.
+      await giveBack()
+      throw error
+    }
     try {
       await save()
     } catch (again) {
@@ -331,13 +365,17 @@ export async function startRun({
       error instanceof Error ? error.message : error
     )
     await captureError(error, { userId, chatId, botId: bot.id, runId })
-    await failRun(
-      { id: runId, chatId, botId: bot.id, assistantMessageId },
-      ENQUEUE_FAILED_MESSAGE,
-      ["queued"]
-    )
-    // Our own failure isn't taken out of the user's allowance.
-    await giveBack()
+    try {
+      await failRun(
+        { id: runId, chatId, botId: bot.id, assistantMessageId },
+        ENQUEUE_FAILED_MESSAGE,
+        ["queued"]
+      )
+    } finally {
+      // Our own failure isn't taken out of the user's allowance, even if
+      // recording it failed too.
+      await giveBack()
+    }
   }
 
   return { ok: true, run: handle, userMessageId }

@@ -2,6 +2,7 @@ import { auth } from "@clerk/nextjs/server"
 
 import { startRun } from "@/lib/agent/start-run"
 import { getPlan } from "@/lib/billing"
+import { readJsonBody } from "@/lib/http"
 
 function fail(
   status: number,
@@ -25,12 +26,15 @@ export async function POST(request: Request) {
     return fail(401, "unauthorized", "Sign in to chat.")
   }
 
-  let body: unknown
-  try {
-    body = await request.json()
-  } catch {
-    return fail(400, "bad_request", "That request wasn't valid.")
+  // A message is at most a few thousand characters; the body is read only up
+  // to a small limit.
+  const read = await readJsonBody(request)
+  if (!read.ok) {
+    return read.status === 413
+      ? fail(413, "too_large", "That message is too long.")
+      : fail(400, "bad_request", "That request wasn't valid.")
   }
+  const body = read.body
 
   // Only the chat's ID and either the new text or the ID of the last message
   // to answer again (after a failed reply) are accepted. Everything else the

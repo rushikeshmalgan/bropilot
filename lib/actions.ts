@@ -10,8 +10,10 @@ import {
 } from "@/lib/agent/run-store"
 import { liveAccess } from "@/lib/agent/start-run"
 import {
+  MAX_CHATS_PER_USER,
   MAX_GROUP_BOTS,
   MAX_TITLE_LENGTH,
+  countChats,
   insertChat,
   removeChat,
   selectBot,
@@ -31,8 +33,25 @@ import { getPlan } from "@/lib/billing"
 import { removeBot } from "@/lib/bot-delete"
 import { getRunQueue } from "@/lib/providers"
 import { botLimitRefusal, READ_ONLY_BOT_MESSAGE } from "@/lib/plans"
+import { checkLimit } from "@/lib/rate-limit"
 import { resetSandbox as resetBotSandbox } from "@/lib/sandbox"
+import { cleanText } from "@/lib/text"
 import { activeBotIds, createBotWithinLimit } from "@/lib/usage"
+
+// Changes a user may make per minute (new bots and chats, memory saves, sandbox
+// resets, deletes), all together. A person never gets near it; a script does,
+// and some of these cost money or rows.
+const ACTION_LIMIT = 60
+const ATTACH_LIMIT = 60
+
+function tooFast(userId: string): { error: string } | null {
+  const limit = checkLimit("actions", userId, ACTION_LIMIT, 60_000)
+  return limit.ok
+    ? null
+    : { error: "You're doing that too quickly. Try again in a minute." }
+}
+
+const CHAT_CAP_MESSAGE = `You have ${MAX_CHATS_PER_USER} chats. Delete some to make room for new ones.`
 
 type CreateBotInput = {
   name: string
@@ -57,11 +76,15 @@ export async function createBot(
   if (!userId) {
     return { error: "You need to be signed in." }
   }
+  const slow = tooFast(userId)
+  if (slow) {
+    return slow
+  }
 
-  const name = input.name.trim()
-  const job = input.job.trim()
-  const instructions = input.instructions.trim()
-  const avatar = input.avatar.trim()
+  const name = cleanText(String(input.name ?? "")).trim()
+  const job = cleanText(String(input.job ?? "")).trim()
+  const instructions = cleanText(String(input.instructions ?? "")).trim()
+  const avatar = cleanText(String(input.avatar ?? "")).trim()
 
   if (!name || name.length > 60) {
     return { error: "Give the bot a name (up to 60 characters)." }
@@ -108,11 +131,18 @@ export async function createChat(
   if (!userId) {
     return { error: "You need to be signed in." }
   }
+  const slow = tooFast(userId)
+  if (slow) {
+    return slow
+  }
   if (typeof botId !== "string" || !botId) {
     return { error: "Pick a bot." }
   }
   if (await isReadOnlyBot(userId, botId)) {
     return { error: READ_ONLY_BOT_MESSAGE }
+  }
+  if ((await countChats(userId)) >= MAX_CHATS_PER_USER) {
+    return { error: CHAT_CAP_MESSAGE }
   }
 
   const id = await insertChat(userId, { botIds: [botId] })
@@ -132,8 +162,13 @@ export async function createGroupChat(input: {
   if (!userId) {
     return { error: "You need to be signed in." }
   }
+  const slow = tooFast(userId)
+  if (slow) {
+    return slow
+  }
 
-  const name = typeof input.name === "string" ? input.name.trim() : ""
+  const name =
+    typeof input.name === "string" ? cleanText(input.name).trim() : ""
   const botIds = Array.isArray(input.botIds)
     ? [...new Set(input.botIds.filter((id) => typeof id === "string"))]
     : []
@@ -148,6 +183,19 @@ export async function createGroupChat(input: {
   }
   if (botIds.length > MAX_GROUP_BOTS) {
     return { error: `A group can have up to ${MAX_GROUP_BOTS} bots.` }
+  }
+
+  // A bot the plan no longer covers can't be answered, so it can't join a
+  // group either (the group's replies would be refused).
+  const active = await activeBotIds(userId, await getPlan(userId))
+  for (const botId of botIds) {
+    if (!active.includes(botId) && (await selectBot(userId, botId))) {
+      return { error: READ_ONLY_BOT_MESSAGE }
+    }
+  }
+
+  if ((await countChats(userId)) >= MAX_CHATS_PER_USER) {
+    return { error: CHAT_CAP_MESSAGE }
   }
 
   const id = await insertChat(userId, { botIds, title: name, group: true })
@@ -165,6 +213,10 @@ export async function deleteChat(
   const { userId } = await auth()
   if (!userId) {
     return { error: "You need to be signed in." }
+  }
+  const slow = tooFast(userId)
+  if (slow) {
+    return slow
   }
   if (typeof chatId !== "string" || !chatId) {
     return { error: "That chat doesn't exist." }
@@ -218,6 +270,10 @@ export async function attachRun(
 ): Promise<{ run: RunHandle | null; snapshot: RunSnapshot } | null> {
   const { userId } = await auth()
   if (!userId || !validId(runId)) {
+    return null
+  }
+  // Each call can mint a read token at Trigger.dev, so it is limited too.
+  if (!checkLimit("attach", userId, ATTACH_LIMIT, 60_000).ok) {
     return null
   }
 
@@ -285,6 +341,10 @@ export async function saveMemoryFile(
   if (!userId) {
     return { error: "You need to be signed in." }
   }
+  const slow = tooFast(userId)
+  if (slow) {
+    return slow
+  }
 
   const { path, content, expectedVersion } = input ?? {}
   if (
@@ -324,6 +384,10 @@ export async function deleteMemoryFile(
   if (!userId) {
     return { error: "You need to be signed in." }
   }
+  const slow = tooFast(userId)
+  if (slow) {
+    return slow
+  }
   if (!validId(botId) || !validMemoryPath(path)) {
     return { error: "That memory file doesn't exist." }
   }
@@ -352,6 +416,10 @@ export async function resetSandbox(
   if (!userId) {
     return { error: "You need to be signed in." }
   }
+  const slow = tooFast(userId)
+  if (slow) {
+    return slow
+  }
   if (!validId(botId)) {
     return { error: "That bot doesn't exist." }
   }
@@ -372,6 +440,10 @@ export async function deleteBot(
   const { userId } = await auth()
   if (!userId) {
     return { error: "You need to be signed in." }
+  }
+  const slow = tooFast(userId)
+  if (slow) {
+    return slow
   }
   if (!validId(botId)) {
     return { error: "That bot doesn't exist." }

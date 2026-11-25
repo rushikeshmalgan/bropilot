@@ -18,7 +18,7 @@ export const REDACTED = "[redacted]"
 export const MAX_STRING_CHARS = 300
 // Cleaning looks at no more than this much of a string, so a huge one can't
 // make it slow. The rest is cut.
-const MAX_INPUT_CHARS = 10_000
+const MAX_INPUT_CHARS = 3_000
 const MAX_DEPTH = 8
 const MAX_ARRAY_ITEMS = 50
 
@@ -58,6 +58,9 @@ const SECRET_PATTERNS: RegExp[] = [
   /\beyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}/g,
   // Anything://user:password@host (database URLs, URLs with credentials).
   /\b[a-z][a-z0-9+.-]*:\/\/[^\s/@:]+:[^\s/@]+@[^\s]+/gi,
+  // Email addresses and IPv4 addresses, which say who someone is.
+  /[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]{1,255}\.[A-Za-z]{2,24}/g,
+  /\b(?:\d{1,3}\.){3}\d{1,3}\b/g,
   // key=value and "key": "value" for names that hold secrets.
   /\b(?:api[_-]?key|secret|token|password|passwd|authorization)\b["']?\s*[:=]\s*["']?[^\s"',;&]{4,}/gi,
 ]
@@ -181,13 +184,26 @@ const SENSITIVE_LAST_WORDS = new Set([
   "token",
 ])
 
+// Words that mark a name as holding what was said to or by the model, wherever
+// they come in a dotted name (gen_ai.prompt.0, ai.response.toolCalls...).
+const SENSITIVE_ANYWHERE = new Set([
+  "prompt",
+  "completion",
+  "messages",
+  "toolcalls",
+  "instructions",
+])
+
 export function isSensitiveKey(key: string) {
   const squashed = key.toLowerCase().replace(/[\s._-]/g, "")
   if (SENSITIVE_KEYS.has(squashed)) {
     return true
   }
-  const last = key.toLowerCase().split(/[\s._-]+/).pop() ?? ""
-  return SENSITIVE_LAST_WORDS.has(last)
+  const words = key.toLowerCase().split(/[\s._-]+/)
+  return (
+    SENSITIVE_LAST_WORDS.has(words[words.length - 1] ?? "") ||
+    words.some((word) => SENSITIVE_ANYWHERE.has(word))
+  )
 }
 
 // Names whose text is part of how an error is found, not something a person
@@ -254,11 +270,16 @@ export function scrubValue(value: unknown, key = "", depth = 0): unknown {
   if (isPlainObject(value)) {
     const out: Json = {}
     for (const [name, inner] of Object.entries(value)) {
-      out[name] = isSensitiveKey(name)
-        ? inner === null || inner === undefined
-          ? inner
-          : REDACTED
-        : scrubValue(inner, name, depth + 1)
+      // A number or a yes/no can't carry anyone's words, so counts such as
+      // prompt_tokens are kept; anything else under a sensitive name is not.
+      out[name] =
+        isSensitiveKey(name) &&
+        typeof inner !== "number" &&
+        typeof inner !== "boolean"
+          ? inner === null || inner === undefined
+            ? inner
+            : REDACTED
+          : scrubValue(inner, name, depth + 1)
     }
     return out
   }
@@ -284,7 +305,9 @@ function scrubErrorMessage(value: unknown): string {
   if (/["']?\b(?:content|text|parts|messages?|prompt)\b["']?\s*:/i.test(value)) {
     return `${REDACTED} (the message carried content)`
   }
-  return scrubString(value, 200)
+  // A database error repeats the query's values after "params:". The query
+  // itself is enough to find the bug.
+  return scrubString(value.split(/\bparams:/i)[0], 200)
 }
 
 // Tags the SDK adds on its own that say where an event came from.
@@ -448,15 +471,77 @@ function scrubSpanList(spans: unknown): unknown[] | undefined {
 
 // Attributes about the person or their machine that the SDK adds on its own.
 // None of them helps find a bug in a reply, so none are sent.
-const DROPPED_ATTRIBUTE = /^(?:user|client|culture|device|network\.peer)\.|^http\.client_ip$/i
+const DROPPED_ATTRIBUTE =
+  /^(?:user|client|culture|device|enduser|network\.peer|net\.peer|net\.sock\.peer)\.|^http\.client_ip$/i
 
 // A span as Sentry sends it. Its name and attributes are cleaned; the timing
 // and the IDs that tie it to its trace are kept. Sentry 11 streams spans one by
 // one (a name and `attributes`); the older format, where spans travel inside a
 // transaction (a description and `data`), is handled the same way.
+// The top-level fields of a span that are sent. Anything else is dropped, so a
+// field a newer SDK adds is not sent until it has been looked at.
+const SPAN_FIELDS = [
+  "trace_id",
+  "span_id",
+  "parent_span_id",
+  "name",
+  "description",
+  "op",
+  "origin",
+  "status",
+  "is_segment",
+  "segment_id",
+  "start_timestamp",
+  "end_timestamp",
+  "timestamp",
+  "exclusive_time",
+  "attributes",
+  "data",
+  "tags",
+]
+
+// What is sent for a span that couldn't be cleaned: where it was and how long
+// it took, and nothing it said. (Sentry sends the original span if this throws
+// or returns nothing, so this must not.)
+const SPAN_FALLBACK_FIELDS = [
+  "trace_id",
+  "span_id",
+  "parent_span_id",
+  "status",
+  "is_segment",
+  "start_timestamp",
+  "end_timestamp",
+  "timestamp",
+]
+
 export function scrubSpan<T extends object>(span: T): T {
   const source = span as Json
-  const out: Json = { ...source }
+  try {
+    return cleanSpan(source) as T
+  } catch {
+    const minimal: Json = {}
+    for (const field of SPAN_FALLBACK_FIELDS) {
+      try {
+        if (source[field] !== undefined) {
+          minimal[field] = source[field]
+        }
+      } catch {
+        // A field that can't be read is left out.
+      }
+    }
+    minimal.name = REDACTED
+    minimal.attributes = {}
+    return minimal as T
+  }
+}
+
+function cleanSpan(source: Json): Json {
+  const out: Json = {}
+  for (const field of SPAN_FIELDS) {
+    if (source[field] !== undefined) {
+      out[field] = source[field]
+    }
+  }
 
   for (const field of ["name", "description"]) {
     const text = source[field]
@@ -477,13 +562,11 @@ export function scrubSpan<T extends object>(span: T): T {
       out[field] = clean
     }
   }
-  // Links carry attributes of their own and nothing we need.
-  delete out.links
   // Tags on a span are limited the same way as on an event.
   if (source.tags !== undefined) {
     out.tags = scrubTags(source.tags)
   }
-  return out as T
+  return out
 }
 
 // The whole event. Returns null (drop it) if anything goes wrong while

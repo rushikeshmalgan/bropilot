@@ -8,6 +8,7 @@ import { and, asc, eq, sql } from "drizzle-orm"
 
 import { db } from "@/lib/db"
 import { botMemoryFiles, bots } from "@/lib/db/schema"
+import { cleanText, safeSlice } from "@/lib/text"
 
 export const MEMORY_INDEX_PATH = "index.md"
 
@@ -18,7 +19,10 @@ export type MemoryLimits = {
 
 export const MEMORY_LIMITS: MemoryLimits = {
   maxFiles: 50,
-  maxFileChars: 20_000,
+  // The same as what a tool may hand back in one go (MAX_TOOL_OUTPUT_CHARS),
+  // so a bot that reads a file always sees all of it and can't save back less
+  // than it read.
+  maxFileChars: 8_000,
 }
 
 export const MAX_MEMORY_PATH_LENGTH = 120
@@ -181,11 +185,13 @@ export async function writeMemory(
   if (typeof input.content !== "string") {
     return { ok: false, code: "too_large", error: "The content must be text." }
   }
-  if (input.content.length > limits.maxFileChars) {
+  // NUL characters can't be stored.
+  const content = cleanText(input.content)
+  if (content.length > limits.maxFileChars) {
     return {
       ok: false,
       code: "too_large",
-      error: `A memory file can hold up to ${limits.maxFileChars} characters. This one has ${input.content.length}.`,
+      error: `A memory file can hold up to ${limits.maxFileChars} characters. This one has ${content.length}.`,
     }
   }
 
@@ -313,15 +319,17 @@ export async function deleteMemory(
 }
 
 // The start of index.md, for the system prompt. Empty if the bot has none.
-// The text is saved notes, so anything that looks like the wrapper it will be
-// placed in is taken out: a note can't close the block and pose as a prompt.
+// The text is saved notes, and a bot writes them after reading web pages, so a
+// page can plant text here. Every angle bracket is taken out, not just the
+// name of the wrapper it is placed in: removing a tag name once can be beaten
+// by nesting (`<</memory-index>/memory-index>` leaves a closing tag behind).
 export function memoryIndexForPrompt(content: string | null | undefined) {
   if (!content) {
     return ""
   }
 
-  return content
-    .replace(/<\/?memory-index>/gi, "")
-    .slice(0, MEMORY_INDEX_PROMPT_CHARS)
-    .trim()
+  return safeSlice(
+    cleanText(content).replace(/[<>]/g, ""),
+    MEMORY_INDEX_PROMPT_CHARS
+  ).trim()
 }

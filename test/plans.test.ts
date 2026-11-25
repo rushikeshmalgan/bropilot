@@ -47,7 +47,7 @@ import { apiError, fakeModel } from "./fakes/fake-model"
 import { fakeRunQueue } from "./fakes/fake-run-queue"
 import { fakeSandbox } from "./fakes/fake-sandbox"
 import { cleanupUser, createTestBot, setUsage, testUserId } from "./helpers/db"
-import { newChat, readChat, send } from "./helpers/runs"
+import { newChat, readChat, send, finishActiveRuns } from "./helpers/runs"
 import { signInAs, signOut } from "./helpers/session"
 
 const FAST = { retryBaseMs: 40, progressIntervalMs: 60 }
@@ -344,7 +344,9 @@ describe("plans and usage", () => {
       expect((await getUsage(user)).runs).toBe(before)
       expect(queue.enqueued).toHaveLength(3)
 
-      // On Pro the same bot works.
+      // On Pro the same bot works (once the replies above are over: a user may
+      // only have a few at the same moment).
+      await finishActiveRuns(user)
       const allowed = await startRun({ userId: user, chatId: readOnlyChat, text: "Hi", plan: "pro" })
       expect(allowed.ok).toBe(true)
     })
@@ -487,7 +489,7 @@ describe("plans and usage", () => {
       })
 
       // Counting again, in any number of ways, changes nothing.
-      await recordRunUsage(runId, { inputTokens: 999, outputTokens: 999, sandboxSeconds: 999 })
+      await recordRunUsage(runId, { inputTokens: 999, outputTokens: 999, sandboxSeconds: 999, webCalls: 0 })
       await executeRun(runId, { ...FAST, model: fakeModel([{ text: ["again"] }]) })
       expect(await getUsage(user)).toMatchObject({ runs: 1, inputTokens: 10, outputTokens: 5 })
     })
@@ -499,7 +501,7 @@ describe("plans and usage", () => {
 
       await Promise.all(
         Array.from({ length: 6 }, () =>
-          recordRunUsage(runId, { inputTokens: 7, outputTokens: 3, sandboxSeconds: 61 })
+          recordRunUsage(runId, { inputTokens: 7, outputTokens: 3, sandboxSeconds: 61, webCalls: 0 })
         )
       )
 
@@ -517,7 +519,7 @@ describe("plans and usage", () => {
       const chat = await newChat(user, bot.id)
       const { run } = await send(user, chat)
 
-      await recordRunUsage(run.runId, { inputTokens: 50, outputTokens: 50, sandboxSeconds: 600 })
+      await recordRunUsage(run.runId, { inputTokens: 50, outputTokens: 50, sandboxSeconds: 600, webCalls: 0 })
 
       expect(await getUsage(user)).toMatchObject({ inputTokens: 0, outputTokens: 0, sandboxMinutes: 0 })
       // It can still be counted properly once it is over.
@@ -532,7 +534,7 @@ describe("plans and usage", () => {
         sql`update runs set usage_counted_at = null, created_at = '2026-09-15T12:00:00Z' where id = ${runId}`
       )
 
-      await recordRunUsage(runId, { inputTokens: 40, outputTokens: 2, sandboxSeconds: 0 })
+      await recordRunUsage(runId, { inputTokens: 40, outputTokens: 2, sandboxSeconds: 0, webCalls: 0 })
 
       expect((await getUsage(user, "2026-09")).inputTokens).toBe(40)
       expect((await getUsage(user)).inputTokens).toBe(0)

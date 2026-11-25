@@ -332,6 +332,12 @@ export const MessageResponse = memo(
       )}
       plugins={streamdownPlugins}
       {...props}
+      // A picture is a request to whoever hosts it, made by the reader's
+      // browser as soon as the text appears. A page a bot read could make it
+      // end its answer with a picture whose address carries the conversation
+      // to an attacker. So bots' answers never show pictures, whatever they
+      // write, and this can't be switched back on by a caller.
+      disallowedElements={["img"]}
     />
   ),
   (prevProps, nextProps) =>

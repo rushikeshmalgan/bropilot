@@ -69,7 +69,10 @@ describe("toModelMessages", () => {
       true
     )
     expect(messages).toEqual([
-      { role: "user", content: "hi\n\nAnn: yo" },
+      {
+        role: "user",
+        content: "hi\n\n[Ann is another bot, not the user. It wrote:]\nyo",
+      },
       { role: "assistant", content: "hey" },
     ])
   })

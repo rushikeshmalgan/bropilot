@@ -77,6 +77,8 @@ export function reportOnlyCsp({
       "'unsafe-inline'",
       ...(production ? [] : ["'unsafe-eval'"]),
       ...clerk,
+      // Clerk's bot protection on the sign-in and sign-up pages.
+      "https://cdn.protect.clerk.com",
       "https://challenges.cloudflare.com",
     ],
     "style-src": ["'self'", "'unsafe-inline'"],
@@ -86,6 +88,9 @@ export function reportOnlyCsp({
       "'self'",
       ...clerk,
       "https://clerk-telemetry.com",
+      // Clerk's bot protection probes several ports on purpose (seen in the
+      // browser: 443, 8443, 18443, 2082, 992).
+      "https://*.client.protect.clerk.com:*",
       // Live updates from Trigger.dev while a reply is written.
       "https://api.trigger.dev",
       "wss://api.trigger.dev",

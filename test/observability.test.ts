@@ -560,7 +560,10 @@ describe("the Trigger.dev task", () => {
     const task = await loadTask(async () => {
       throw new Error("metadata is down")
     })
-    await expect(task.run({ runId: "no_such_run" })).rejects.toThrow("metadata is down")
+    // The error kept on the run doesn't repeat what went wrong.
+    await expect(task.run({ runId: "no_such_run" })).rejects.toThrow(
+      "The reply could not be produced."
+    )
     expect(sentry.state.flushed).toHaveLength(1)
   })
 })
