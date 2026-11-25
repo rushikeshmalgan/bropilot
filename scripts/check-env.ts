@@ -14,7 +14,7 @@ import {
 } from "../lib/env"
 
 const SCOPE_TITLES: Record<EnvScope, string> = {
-  web: "Next.js server (Railway, or `npm run dev`)",
+  web: "Next.js server (Vercel, or `npm run dev`)",
   worker: "Trigger.dev worker (Trigger.dev environment, or `trigger dev`)",
   build: "Build (`next build`)",
   tools: "Scripts run by hand (db:push, smoke checks)",

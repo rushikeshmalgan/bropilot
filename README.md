@@ -17,7 +17,7 @@ A web app for creating AI bots and chatting with them, in early development. Eac
 | Web tools | [Firecrawl](https://firecrawl.dev) v2 REST API for web search and page reading, behind `lib/providers/firecrawl.ts` |
 | Error tracking | [Sentry](https://sentry.io) (`@sentry/nextjs` in the app, `@sentry/node` in the Trigger.dev worker); starts only when `SENTRY_DSN` is set, and never sends message text, memory, tool output or keys |
 | Sandboxes | [Daytona](https://www.daytona.io) (`@daytonaio/sdk`) behind `lib/providers/daytona.ts`; used only when `DAYTONA_API_KEY` is set |
-| Hosting   | [Railway](https://railway.com)                                                                                   |
+| Hosting   | [Vercel](https://vercel.com): project `bro-pilot`, Next.js preset, Node 22                                          |
 
 ## Status
 
@@ -114,17 +114,19 @@ vitest.config.ts  Vitest configuration
 
 ## Deployment
 
-Deployed on Railway from this repository: https://bro-pilot-production.up.railway.app
+Live on Vercel: https://bro-pilot.vercel.app (project `bro-pilot`).
 
-Sentry is optional: set `SENTRY_DSN` on Railway (at build time too, so the browser reports) and in the Trigger.dev environment (so the worker reports); add `SENTRY_AUTH_TOKEN`, `SENTRY_ORG` and `SENTRY_PROJECT` to Railway's build to upload source maps. Plans need Clerk Billing enabled in the Clerk dashboard, with a paid plan whose slug is `pro`; until then every user is on Free. Bot replies need two more things in production that are not set up yet: the `execute-run` task deployed to Trigger.dev (`npx trigger.dev@latest deploy`), with `DATABASE_URL` and `GOOGLE_GENERATIVE_AI_API_KEY` set in the Trigger.dev environment, and the production `TRIGGER_SECRET_KEY` set on Railway.
+Deploys are made with the Vercel CLI from a clean copy of a commit. The project isn't connected to GitHub yet, so a push doesn't deploy on its own; connect the repository in Vercel > Settings > Git to change that. For now `TRIGGER_SECRET_KEY` on Vercel is the Trigger.dev Development key, so live replies are written only while `npx trigger.dev@latest dev` is running on the developer's machine: the production worker can't be deployed yet, because Trigger.dev answers "Deployments are not available for this organization" for this account.
+
+Sentry is optional: set `SENTRY_DSN` on Vercel (at build time too, so the browser reports) and in the Trigger.dev environment (so the worker reports); add `SENTRY_AUTH_TOKEN`, `SENTRY_ORG` and `SENTRY_PROJECT` to Vercel's build to upload source maps. Plans need Clerk Billing enabled in the Clerk dashboard, with a paid plan whose slug is `pro`; until then every user is on Free. Bot replies need two more things in production that are not set up yet: the `execute-run` task deployed to Trigger.dev (`npx trigger.dev@latest deploy`), with `DATABASE_URL` and `GOOGLE_GENERATIVE_AI_API_KEY` set in the Trigger.dev environment, and the production `TRIGGER_SECRET_KEY` set on Vercel.
 
 ### Where each variable goes
 
 Run `npm run check:env` to see, for each place below, which of its variables are set (names only, never values). The app also logs what is missing when it starts and when it is built, and `/api/health` says whether replies, sandboxes and error tracking are on.
 
-- **Railway, the web server** (`*` = required): `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`*, `CLERK_SECRET_KEY`*, `DATABASE_URL`*, `TRIGGER_SECRET_KEY` (the production secret key, `tr_prod_...`; without it messages can't be sent), `DAYTONA_API_KEY` and `DAYTONA_SNAPSHOT` (sandboxes), `SENTRY_DSN`, and optionally `SENTRY_TRACES_SAMPLE_RATE`, `SENTRY_ENVIRONMENT`, the Clerk redirect paths (`NEXT_PUBLIC_CLERK_SIGN_IN_URL`, `NEXT_PUBLIC_CLERK_SIGN_UP_URL`, `NEXT_PUBLIC_CLERK_SIGN_IN_FALLBACK_REDIRECT_URL`, `NEXT_PUBLIC_CLERK_SIGN_UP_FALLBACK_REDIRECT_URL`). Never set `BILLING_STUB_PLAN` or `BILLING_PROVIDER` in production.
-- **Railway, at build time**: the two Clerk public variables above, `SENTRY_DSN` (so the browser reports errors too), and to upload source maps `SENTRY_AUTH_TOKEN`, `SENTRY_ORG` and `SENTRY_PROJECT`.
-- **The Trigger.dev environment, the worker that writes replies**: `DATABASE_URL`*, `GOOGLE_GENERATIVE_AI_API_KEY`* (the model is called from here, not from Railway), `FIRECRAWL_API_KEY` (web tools), `DAYTONA_API_KEY` and `DAYTONA_SNAPSHOT` (sandboxes), `SENTRY_DSN`, and optionally `SENTRY_TRACES_SAMPLE_RATE` and `SENTRY_ENVIRONMENT`. The worker doesn't see Railway's variables: a key set only on Railway does nothing for the model, the web tools or the tools in a sandbox.
+- **Vercel, the web server** (`*` = required): `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`*, `CLERK_SECRET_KEY`*, `DATABASE_URL`*, `TRIGGER_SECRET_KEY` (the production secret key, `tr_prod_...`; without it messages can't be sent), `DAYTONA_API_KEY` and `DAYTONA_SNAPSHOT` (sandboxes), `SENTRY_DSN`, and optionally `SENTRY_TRACES_SAMPLE_RATE`, `SENTRY_ENVIRONMENT`, the Clerk redirect paths (`NEXT_PUBLIC_CLERK_SIGN_IN_URL`, `NEXT_PUBLIC_CLERK_SIGN_UP_URL`, `NEXT_PUBLIC_CLERK_SIGN_IN_FALLBACK_REDIRECT_URL`, `NEXT_PUBLIC_CLERK_SIGN_UP_FALLBACK_REDIRECT_URL`). Never set `BILLING_STUB_PLAN` or `BILLING_PROVIDER` in production.
+- **Vercel, at build time**: the two Clerk public variables above, `SENTRY_DSN` (so the browser reports errors too), and to upload source maps `SENTRY_AUTH_TOKEN`, `SENTRY_ORG` and `SENTRY_PROJECT`.
+- **The Trigger.dev environment, the worker that writes replies**: `DATABASE_URL`*, `GOOGLE_GENERATIVE_AI_API_KEY`* (the model is called from here, not from Vercel), `FIRECRAWL_API_KEY` (web tools), `DAYTONA_API_KEY` and `DAYTONA_SNAPSHOT` (sandboxes), `SENTRY_DSN`, and optionally `SENTRY_TRACES_SAMPLE_RATE` and `SENTRY_ENVIRONMENT`. The worker doesn't see Vercel's variables: a key set only on Vercel does nothing for the model, the web tools or the tools in a sandbox.
 - **Your machine, for scripts**: `DATABASE_URL_UNPOOLED` and `NEON_BRANCH` (for `db:push`), and any of the keys above for the smoke scripts (`SMOKE_SECRET_CANARY` is used only by `scripts/smoke-daytona.ts`).
 
 ### Deploying
@@ -132,12 +134,12 @@ Run `npm run check:env` to see, for each place below, which of its variables are
 1. Check it: `npm run typecheck`, `npm run lint`, `npm test` and `npm run build`.
 2. If `lib/db/schema.ts` changed, apply it first with `npm run db:push` against the production database (there are no migrations; it only goes forward).
 3. Deploy the worker: `npx trigger.dev@latest deploy`. The worker has its own copy of `lib/agent`, `lib/providers` and the rest of the reply code, so redeploy it whenever any of that changes, not only when `src/trigger` does.
-4. Deploy the web server: Railway builds and deploys from this repository.
+4. Deploy the web server: `npx vercel deploy --prod` from a clean clone of the commit (`git clone --depth 1`), so no local file such as `.env.local` is uploaded; or push to `main` once the Vercel project is connected to GitHub.
 5. Check `/api/health` on the live URL: `status` should be `ok`, and `features` shows what is switched on.
 
 ### Rolling back
 
-- **Web server**: in Railway, open the service's Deployments and redeploy the last good one.
+- **Web server**: in Vercel, open the project's Deployments, pick the last good one and promote it to Production (or run `npx vercel rollback`).
 - **Worker**: check out the last good commit and run `npx trigger.dev@latest deploy` again. (Trigger.dev also keeps earlier versions in its dashboard; promoting one from there hasn't been tried here.)
 - **Database**: a schema change can't be rolled back (no migrations). Keep changes additive when a rollback might be needed.
 
@@ -145,12 +147,12 @@ Run `npm run check:env` to see, for each place below, which of its variables are
 
 Work down this list; each step names where to look.
 
-1. **Open `/api/health`.** `database: "error"` means the web server can't reach Neon (check `DATABASE_URL` on Railway and Neon's status). `features.replies: false` means `TRIGGER_SECRET_KEY` is missing or isn't a secret key on Railway.
-2. **"Replies aren't switched on" in the chat** is the same thing: set the production `TRIGGER_SECRET_KEY` on Railway.
+1. **Open `/api/health`.** `database: "error"` means the web server can't reach Neon (check `DATABASE_URL` on Vercel and Neon's status). `features.replies: false` means `TRIGGER_SECRET_KEY` is missing or isn't a secret key on Vercel.
+2. **"Replies aren't switched on" in the chat** is the same thing: set the production `TRIGGER_SECRET_KEY` on Vercel.
 3. **A reply stays on "Thinking…" and then fails with "took too long"** (after about five minutes): the worker never picked it up or died. In the Trigger.dev dashboard, open Runs and look for `execute-run`. No run: the task isn't deployed, or `TRIGGER_SECRET_KEY` belongs to a different environment than the deployed worker. A run that failed: read its error, and check that `DATABASE_URL` and `GOOGLE_GENERATIVE_AI_API_KEY` are set in that Trigger.dev environment.
 4. **"The model is busy"**: Gemini returned a rate limit three times in a row. Check the quota for `GOOGLE_GENERATIVE_AI_API_KEY`; the user can press Try again.
 5. **"Something went wrong with that reply"**: look in Sentry (if on) for the `runId` tag, or in the database: `select id, status, error, created_at from runs order by created_at desc limit 20;`.
-6. **Bots say they can't browse**: `FIRECRAWL_API_KEY` is missing in the Trigger.dev environment (setting it only on Railway does nothing). **Bots have no sandbox**: `DAYTONA_API_KEY` is missing on Railway or in Trigger.dev, or the user's plan is Free.
+6. **Bots say they can't browse**: `FIRECRAWL_API_KEY` is missing in the Trigger.dev environment (setting it only on Vercel does nothing). **Bots have no sandbox**: `DAYTONA_API_KEY` is missing on Vercel or in Trigger.dev, or the user's plan is Free.
 7. **A reply stuck on "running"**: nothing to do. Runs that stop reporting are marked failed the next time anyone opens the chat or sends a message in it, and the user gets Try again.
 8. **Users report "used all replies"** (HTTP 402): the plan's monthly limit; plans come from Clerk Billing (plan slug `pro`).
 

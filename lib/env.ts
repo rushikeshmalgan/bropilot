@@ -6,10 +6,10 @@
 // Only names are ever shown. A value is never read into a message or a log.
 
 // Where a variable has to be set for the thing it feeds to work:
-//   web     the Next.js server (Railway, or `npm run dev`)
+//   web     the Next.js server (Vercel, or `npm run dev`)
 //   worker  the Trigger.dev worker (the Trigger.dev environment, or
 //           `trigger dev` reading .env.local)
-//   build   `next build` (Railway's build step)
+//   build   `next build` (Vercel's build step)
 //   tools   scripts run by hand (db:push, smoke checks)
 export type EnvScope = "web" | "worker" | "build" | "tools"
 
