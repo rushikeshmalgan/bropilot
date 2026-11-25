@@ -12,9 +12,10 @@ import { nanoid } from "nanoid"
 
 import { hasEnv } from "./env"
 
+// Throws instead of exiting, so the `finally` blocks that remove what the
+// check created still run. The handler at the bottom prints it and exits 1.
 function fail(message: string): never {
-  console.error(`FAIL: ${message}`)
-  process.exit(1)
+  throw new Error(message)
 }
 
 async function main() {
@@ -94,5 +95,8 @@ async function main() {
 
 main().then(
   () => process.exit(0),
-  (error) => fail(error instanceof Error ? error.message : String(error))
+  (error) => {
+    console.error(`FAIL: ${error instanceof Error ? error.message : String(error)}`)
+    process.exit(1)
+  }
 )
