@@ -75,7 +75,7 @@ Create `.env.local` before starting. It needs these variables (names only; value
 | `BILLING_PROVIDER`                                                                                    | Development only: set to `clerk` to check plans with Clerk Billing instead of the stand-in. Production always uses Clerk |
 | `BILLING_STUB_PLAN`                                                                                   | Development only: set to `pro` to act as a Pro user. Ignored whenever `NODE_ENV` is `production` |
 | `DAYTONA_API_KEY`                                                                                     | Optional. Daytona API key; turns on the bots' sandboxes. The SDK also reads `DAYTONA_API_URL` and `DAYTONA_TARGET` from the environment if you need a different server or region |
-| `DAYTONA_SNAPSHOT`                                                                                    | Optional. The name of a Daytona snapshot to make sandboxes from. Needed only if the default sandbox image has no desktop, so computer use can't start (see `docs/computer-use.md`) |
+| `DAYTONA_SNAPSHOT`                                                                                    | Optional. The name of a Daytona snapshot to make sandboxes from. Not needed with Daytona's default image, which has a working desktop (checked against the real service on 2026-11-25); set it only to use an image of your own (see `docs/computer-use.md`) |
 
 To get the Neon variables, run `npx neon@latest login`, then `npx neon@latest link` and pick the `bro-pilot` project. The link command writes them to `.env.local`.
 

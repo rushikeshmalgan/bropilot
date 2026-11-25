@@ -69,15 +69,26 @@ function stateOf(raw: string | undefined): SandboxState {
 
 // The desktop service reports a status word. The SDK doesn't list the words,
 // so unknown ones are treated as an error (and logged) rather than guessed at.
+//
+// Seen from the real service (2026-11-25, default image daytonaio/sandbox):
+// "partial" before the desktop is started (only some background processes are
+// up), then "active" a few seconds after computerUse.start(). So "partial"
+// means "not started yet", not "on its way": treating it as starting meant the
+// desktop was never started and the app waited for nothing.
 function desktopStateOf(raw: string | undefined): DesktopState {
   const word = (raw ?? "").toLowerCase()
   if (word === "active" || word === "running") {
     return "running"
   }
-  if (word === "inactive" || word === "stopped" || word === "") {
+  if (
+    word === "inactive" ||
+    word === "stopped" ||
+    word === "partial" ||
+    word === ""
+  ) {
     return "stopped"
   }
-  if (word === "partial" || word === "starting") {
+  if (word === "starting") {
     return "starting"
   }
 

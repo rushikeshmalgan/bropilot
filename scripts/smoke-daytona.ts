@@ -186,16 +186,30 @@ async function main() {
     }
   }
 
+  // Deleting is asynchronous at Daytona: the sandbox reads "destroying" (the
+  // app's "deleting") for a while, then disappears. Seen on 2026-11-25.
+  let state = await provider.status(sandboxId!)
   check(
-    (await provider.status(sandboxId!)) === "missing",
-    "the sandbox still exists after delete"
+    state === "missing" || state === "deleting",
+    `the sandbox is still ${state} after delete`
+  )
+  const waitedFrom = Date.now()
+  while (state !== "missing" && Date.now() - waitedFrom < 120_000) {
+    await new Promise((resolve) => setTimeout(resolve, 3000))
+    state = await provider.status(sandboxId!)
+  }
+  check(
+    state === "missing",
+    "the sandbox was still being deleted after two minutes"
   )
   check(
     !(await provider.findByBot(botId)).includes(sandboxId!),
     "the deleted sandbox is still listed"
   )
   await provider.delete(sandboxId!)
-  console.log("ok   deleted it; deleting again is fine")
+  console.log(
+    `ok   deleted it (gone after ${Math.round((Date.now() - waitedFrom) / 1000)} s); deleting again is fine`
+  )
   console.log("PASS")
 }
 

@@ -404,7 +404,8 @@ describe("the Daytona adapter's desktop", () => {
       inactive: "stopped",
       stopped: "stopped",
       "": "stopped",
-      partial: "starting",
+      // What the real service reports before the desktop is started.
+      partial: "stopped",
       starting: "starting",
       "something-new": "error",
     }
@@ -441,6 +442,27 @@ describe("the Daytona adapter's desktop", () => {
 
     vi.useFakeTimers()
     const started = provider.start("sb-1")
+    await vi.advanceTimersByTimeAsync(10_000)
+    await started
+
+    expect(box.computerUse.start).toHaveBeenCalledOnce()
+  })
+
+  it("starts a desktop that reports partial, as the real service does before it is started", async () => {
+    const sandboxes = daytonaProvider("k")
+    const answers = ["partial", "partial", "active"]
+    const box = sandbox({
+      computerUse: {
+        ...sandbox().computerUse,
+        getStatus: vi.fn(async () => ({ status: answers.shift() ?? "active" })),
+      },
+    })
+    mock.sandboxes.set("sb-1", box)
+    // Load the SDK before the clock is faked: the module load can't run on it.
+    await sandboxes.status("sb-1")
+
+    vi.useFakeTimers()
+    const started = sandboxes.desktop.start("sb-1")
     await vi.advanceTimersByTimeAsync(10_000)
     await started
 

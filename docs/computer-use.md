@@ -155,7 +155,11 @@ Both do the same thing: stop the bot's current reply.
 
 These are things I couldn't confirm without the real service. Each is either
 guarded so a wrong guess fails safe, or checked by `scripts/smoke-daytona.ts`
-the first time a key is available. Until then the real adapter is "unproven".
+the first time a key is available.
+
+**Update, 2026-11-25: checked against the real service.** `scripts/smoke-daytona.ts`
+passes end to end with a real key, desktop included. Items 1 to 5 are answered
+below; 6 to 8 are still open.
 
 1. **Whether the default Daytona sandbox has a desktop at all.** The desktop
    needs a graphical environment (X server, window manager, VNC). The default
@@ -163,15 +167,23 @@ the first time a key is available. Until then the real adapter is "unproven".
    snapshot to create sandboxes from; if the default has no desktop, the owner
    needs to set it. If the desktop can't start, the state becomes **error**
    with a plain message.
+   **Answered:** yes. The default image (`daytonaio/sandbox:0.11.0`) has
+   Xvfb, xfce4, x11vnc, noVNC and websockify, and `computerUse.start()` brings
+   them all up in a few seconds. No `DAYTONA_SNAPSHOT` is needed.
 2. **The desktop's status words.** The SDK says it returns a status string but
    not which words. The adapter treats `active`/`running` as up,
    `inactive`/`stopped` as down and `partial`/`starting` as coming up, and
    anything else as an error (logging the unexpected word, which is not a
    secret) so a wrong guess shows up instead of spinning forever.
+   **Answered, and the first guess was wrong:** the service says `partial`
+   before the desktop has been started and `active` once it is up. Reading
+   `partial` as "coming up" meant the adapter never called `start()` and gave
+   up after waiting; `partial` now counts as stopped.
 3. **The viewer's port and address.** I'm using port 6080 and `/vnc.html` for
    the noVNC viewer, with `view_only=true`, `autoconnect=true` and
    `resize=scale` as query parameters, from my memory of Daytona's examples
    and noVNC's own options. The SDK's types don't state them.
+   **Answered:** a viewer address made this way loads.
 4. **Signed preview URLs.** Unknown: whether the token sits in the host name,
    the path or a query string (so whether adding a path keeps it), whether a
    connection that is already open survives the URL expiring, whether the
@@ -183,9 +195,15 @@ the first time a key is available. Until then the real adapter is "unproven".
    exposes the sandbox id" is true of *our* responses and not of the provider's
    URL. The only way to hide it would be to proxy the viewer through this
    server, which needs WebSocket proxying the hosting here doesn't offer.
+   **Answered in part:** the host name does NOT contain the sandbox's ID, and
+   the page sends no X-Frame-Options or frame-ancestors rule, so it can be
+   shown in the app's iframe. Whether an open connection survives the URL
+   expiring is still unchecked.
 5. **Screenshot details.** The SDK returns a base64 image with no stated
    format or size. The adapter reads the size from the image's own header
    (PNG), and refuses an image it can't read the size of.
+   **Answered:** a PNG, 1024 by 768 pixels. Mouse moves, clicks, scrolls,
+   typing and key presses are all accepted.
 6. **Key names.** `press` takes names like `Return`, `Escape`, `Tab`. I don't
    know the provider's exact vocabulary; the tool passes the model's choice
    through and returns the provider's error if it isn't accepted.
